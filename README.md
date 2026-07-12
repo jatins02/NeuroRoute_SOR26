@@ -29,12 +29,28 @@ The system simulates heavy network traffic—generating thousands of mock packet
 ---
 
 ## 📁 Module Architecture
-neuroroute/ ├── router/ │ ├── plane.py # Asynchronous data plane; handles packet queues, buffers, and forwarding. │ └── generator.py # Traffic generator utilizing Poisson distribution model. ├── ai/ │ ├── agent.py # RL Agent definitions (Q-tables, PyTorch DQN models). │ └── env.py # Gymnasium wrapper mapping network state to observation space. ├── network/ │ ├── topology.py # Configuration parser, graph managers, and adjacent link metrics. │ └── algorithms.py # Dijkstra's shortest path and Round-Robin baselines. ├── cli/ │ ├── simulate.py # Entrypoint; orchestrates the main simulation loop. │ └── tui.py # Dashboard rendering using rich.live. └── tests/ # Unit, integration, and performance benchmarks.
 
-
+```
+neuroroute/
+├── router/
+│   ├── plane.py          # Asynchronous data plane; handles packet queues, buffers, and forwarding.
+│   └── generator.py      # Traffic generator utilizing Poisson distribution model.
+├── ai/
+│   ├── agent.py          # RL Agent definitions (Q-tables, PyTorch DQN models).
+│   └── env.py            # Gymnasium wrapper mapping network state to observation space.
+├── network/
+│   ├── topology.py       # Configuration parser, graph managers, and adjacent link metrics.
+│   └── algorithms.py     # Dijkstra's shortest path and Round-Robin baselines.
+├── cli/
+│   ├── simulate.py       # Entrypoint; orchestrates the main simulation loop.
+│   └── tui.py            # Dashboard rendering using rich.live.
+└── tests/                # Unit, integration, and performance benchmarks.
+```
 
 ---
+
 ## 📈 6-Week Development Timeline
+
 ```mermaid
 gantt
     title NeuroRoute Development Timeline (6 Weeks)
@@ -76,44 +92,56 @@ gantt
     Mermaid Docs & Readme (C, D)      : 36, 42
     Code Freeze & Coverage (All)      : 36, 42
     Live SURGE Demo Script (All)      : 36, 42
-👥 Contributor Expectations & Splits
-Contributor A (Data Plane & Queues): Implements asynchronous packet queues, buffer drop logic, lock-free performance optimizations, and the Poisson traffic generator.
-Contributor B (RL Training & Models): Formulates the Markov Decision Process (MDP), completes the Gymnasium interface, implements Q-Learning and PyTorch DQNs, and optimizes AI inference times.
-Contributor C (Network Topology & Chaos): Develops the topology graph manager, parses configurations, implements static shortest-path algorithms, and writes the network chaos injection utilities.
-Contributor D (CLI & Visualizer): Designs the primary command-line parser, orchestrates the main simulation loop, and builds the real-time interactive terminal (TUI) dashboard.
-⚙️ Branching & Collaboration Protocol
+```
+
+---
+
+## 👥 Contributor Expectations & Splits
+
+*   **Contributor A (Data Plane & Queues):** Implements asynchronous packet queues, buffer drop logic, lock-free performance optimizations, and the Poisson traffic generator.
+*   **Contributor B (RL Training & Models):** Formulates the Markov Decision Process (MDP), completes the Gymnasium interface, implements Q-Learning and PyTorch DQNs, and optimizes AI inference times.
+*   **Contributor C (Network Topology & Chaos):** Develops the topology graph manager, parses configurations, implements static shortest-path algorithms, and writes the network chaos injection utilities.
+*   **Contributor D (CLI & Visualizer):** Designs the primary command-line parser, orchestrates the main simulation loop, and builds the real-time interactive terminal (TUI) dashboard.
+
+---
+
+## ⚙️ Branching & Collaboration Protocol
+
 To maintain high code quality and follow a structured Software Development Life Cycle (SDLC):
 
-Branch Naming Convention: Create a separate branch for every issue using the following format: feature/week-<num>/issue-<num>-short-description Example: feature/week-2/issue-5-async-router-node
+1.  **Branch Naming Convention:**
+    Create a separate branch for every issue using the following format:
+    `feature/week-<num>/issue-<num>-short-description`
+    *Example:* `feature/week-2/issue-5-async-router-node`
 
-Pull Requests & Merging:
+2.  **Pull Requests & Merging:**
+    *   PRs must target the `main` branch.
+    *   Include `Closes #<issue_number>` in the PR description to link and close the issue automatically.
+    *   Require at least **one peer review** approval before merging:
+        *   *Contributor A* and *Contributor C* review each other's work (Data Plane / Network).
+        *   *Contributor B* and *Contributor D* review each other's work (AI Models / CLI / UI).
 
-PRs must target the main branch.
-Include Closes #<issue_number> in the PR description to link and close the issue automatically.
-Require at least one peer review approval before merging:
-Contributor A and Contributor C review each other's work (Data Plane / Network).
-Contributor B and Contributor D review each other's work (AI Models / CLI / UI).
-🚀 Getting Started
-Prerequisites
-Python 3.9 or higher
-PyTorch (compiled with CUDA or Metal depending on hardware)
-Installation
-Clone the repository:
+---
 
-bash
+## 🚀 Getting Started
 
+### Prerequisites
+*   Python 3.9 or higher
+*   PyTorch (compiled with CUDA or Metal depending on hardware)
 
-git clone https://github.com/AnmolM-777/NeuroRoute_SOR26.git
-cd NeuroRoute_SOR26
-Install dependencies:
+### Installation
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/AnmolM-777/NeuroRoute_SOR26.git
+   cd NeuroRoute_SOR26
+   ```
 
-bash
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-
-pip install -r requirements.txt
-Run tests:
-
-bash
-
-
-pytest
+3. Run tests:
+   ```bash
+   pytest
+   ```
