@@ -5,7 +5,7 @@ import yaml
 class TopologyManager:
     def __init__(self):
         # graph format: {source: {dest: {"latency" : float, "bandwidth" : float}}}
-        self.graph : dict[str, dict[str, list[float, float]]] = {}
+        self.graph : dict[str, dict[str, dict[float, float]]] = {}
 
     def load_topology(self, location) -> None:
         # check if filepath exists
@@ -20,7 +20,7 @@ class TopologyManager:
         with open(location, "r") as f:
             if ext == ".json":
                 data = json.load(f)
-            elif ext == ".yaml":
+            elif ext in (".yaml", ".yml"):
                 data = yaml.safe_load(f)
             else:
                 raise ValueError(f"Unsupported file format: {ext}")
@@ -42,17 +42,16 @@ class TopologyManager:
             latency, bandwidth = float(link.get("latency", 0)), float(link.get("bandwidth", 0))
 
             # set link parameters in graph
-            self.graph[start][dest] = [latency, bandwidth]
+            self.graph[start][dest] = {"latency": latency, "bandwidth": bandwidth}
 
     def print_graph(self):
         for start in self.graph.keys():
             # self.graph[start], is the assigned dict
             for dest, params in self.graph[start].items():
-                print(f"{start} -> {dest}: (latency: {params[0]}, bandwidth: {params[1]})")
+                print(f"{start} -> {dest}: (latency: {params["latency"]}, bandwidth: {params["bandwidth"]})")
             print()
 
 
 top = TopologyManager()
 top.load_topology("configs/square-topology.json")
 top.print_graph()
-
