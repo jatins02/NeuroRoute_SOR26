@@ -1,6 +1,8 @@
 import json
-import os
 import yaml
+import os
+from typing import Optional
+
 
 class TopologyManager:
     def __init__(self):
@@ -44,6 +46,32 @@ class TopologyManager:
             # set link parameters in graph
             self.graph[start][dest] = {"latency": latency, "bandwidth": bandwidth}
 
+    def is_connected(self, start : str, end : str) -> bool:
+        # check if node is connected on the graph
+        return end in self.graph.get(start, {})
+
+    def get_neighbours(self, node : str) -> list[str]:
+        # returns list of outgoing neighbours
+        return list(self.graph.get(node, {}).keys())
+
+    def get_link_metrics(self, start: str, end: str) -> dict[float, float]:
+        if not self.is_connected(start, end):
+            # this link doesn't exist on graph
+            raise KeyError(f"No direct link between {start} and {end}")
+
+        return self.graph[start][end]
+
+    def update_link(self, start : str, end: str, latency: Optional[float] = None, bandwidth: Optional[float] = None) -> None:
+        # if the link doesn't exist, raise KeyError
+        if not self.is_connected(start, end):
+            raise KeyError(f"No direct link between {start} and {end}")
+
+        if latency is not None:
+            self.graph[start][end]["latency"] = float(latency)
+        if bandwidth is not None:
+            self.graph[start][end]["bandwidth"] = float(bandwidth)
+
+    # utility function
     def print_graph(self):
         for start in self.graph.keys():
             # self.graph[start], is the assigned dict
