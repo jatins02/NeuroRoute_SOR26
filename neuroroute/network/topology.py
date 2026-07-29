@@ -80,6 +80,13 @@ class TopologyManager:
             print()
 
 
+# instantiation and testing
 top = TopologyManager()
 top.load_topology("configs/square-topology.json")
-top.print_graph()
+# top.print_graph()
+
+"""testing TopologyManager class functions"""
+# top.update_link("nodeA", "nodeB", 44, 122)
+# print(top.get_link_metrics("nodeA", "nodeB"))
+# print(top.get_neighbours("nodeB"))
+# top.print_graph()
