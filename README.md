@@ -1,7 +1,7 @@
 # NeuroRoute
 > **AI-Driven High-Concurrency Network Packet Optimizer**
 
-NeuroRoute is a high-performance network simulation environment and command-line utility designed to replace traditional, static network routing protocols (such as Round-Robin or OSPF) with a localized, lightweight Reinforcement Learning (RL) agent. 
+NeuroRoute is a high-performance network simulation environment and command-line utility designed to replace traditional, static network routing protocols (such as Round-Robin or OSPF) with a localized, lightweight Reinforcement Learning (RL) agent.
 
 The system simulates heavy network traffic—generating thousands of mock packets per second across arbitrary topologies—using an asynchronous, thread-safe Python core. Concurrently, an integrated RL agent observes queue depths, link latencies, and drop rates to dynamically route traffic around bottlenecks and packet hot spots in real time.
 
@@ -56,37 +56,37 @@ gantt
     title NeuroRoute Development Timeline (6 Weeks)
     dateFormat  X
     axisFormat  Week %d
-    
+
     section Sprint 1: Setup
     Scaffolding & DevOps Setup (All)  :active, 1, 7
     Data Plane Interfaces (A)         :active, 1, 7
     Gym Env Blueprint (B)             :active, 1, 7
     CLI Scaffold (D)                 :active, 1, 7
-    
+
     section Sprint 2: Core Plane
     Async Router queues (A)           : 8, 14
     Topology Parser (C)               : 8, 14
     Dijkstra Baselines (C)            : 8, 14
     Static Path Tests (A, C)          : 8, 14
-    
+
     section Sprint 3: Gym & Agent
     Gym Observation/Reward (B)        : 15, 21
     Q-Learning Agent (B)              : 15, 21
     CLI Integration (D)               : 15, 21
     E2E Multi-Node Tests (A, B)       : 15, 21
-    
+
     section Sprint 4: AI & Chaos
     DQN PyTorch Model (B)             : 22, 28
     Poisson Traffic Gen (A)           : 22, 28
     Dynamic Link Chaos (C)            : 22, 28
     TUI Layout Scaffold (D)           : 22, 28
-    
+
     section Sprint 5: Optimization
     TUI Metrics Binding (D)           : 29, 35
     Queue Locking Optimization (A)    : 29, 35
     DQN Inference & GIL Bypass (B)    : 29, 35
     Multi-Agent Coordination (All)    : 29, 35
-    
+
     section Sprint 6: QA & Demo
     Benchmarking Suite (A, B)         : 36, 42
     Mermaid Docs & Readme (C, D)      : 36, 42
