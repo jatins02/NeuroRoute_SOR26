@@ -22,6 +22,7 @@ from neuroroute.router.plane import (  # noqa: E402
     PacketValidationError,
     Priority,
     RouteEntry,
+    RouterNode,
 )
 
 
@@ -368,6 +369,131 @@ class TestBaseRouterNode(unittest.TestCase):
             await a.enqueue(p)
             result = await a.process_one()
             self.assertIsNone(result)
+
+        asyncio.run(run())
+
+
+        asyncio.run(run())
+
+
+# --------------------------------------------------------------------------
+# RouterNode concrete tests
+# --------------------------------------------------------------------------
+
+class TestRouterNode(unittest.TestCase):
+
+    def test_link_and_unlink_peer(self):
+        node_a = RouterNode("node-A")
+        node_b = RouterNode("node-B")
+        node_a.link_peer(node_b, metric=2)
+        self.assertIn("node-B", node_a.peers)
+        self.assertIn("node-B", node_a.routing_table)
+        self.assertEqual(node_a.routing_table["node-B"].metric, 2)
+
+        node_a.unlink_peer("node-B")
+        self.assertNotIn("node-B", node_a.peers)
+        self.assertNotIn("node-B", node_a.routing_table)
+
+    def test_lookup_route_prefix_and_exact(self):
+        node = RouterNode("node-A")
+        node.add_route("192.168.", "router-gw", metric=1)
+        node.add_route("192.168.1.100", "node-target", metric=1)
+
+        # Exact match
+        route_exact = node.lookup_route("192.168.1.100")
+        self.assertIsNotNone(route_exact)
+        self.assertEqual(route_exact.next_hop, "node-target")
+
+        # Prefix match
+        route_prefix = node.lookup_route("192.168.2.55")
+        self.assertIsNotNone(route_prefix)
+        self.assertEqual(route_prefix.next_hop, "router-gw")
+
+        # No match
+        self.assertIsNone(node.lookup_route("10.0.0.1"))
+
+    def test_buffer_overflow_and_drop_counter(self):
+        async def run():
+            node = RouterNode("node-A", buffer_size=2)
+            p1 = make_packet(source="node-S", destination="node-A")
+            p2 = make_packet(source="node-S", destination="node-A")
+            p3 = make_packet(source="node-S", destination="node-A")
+
+            self.assertTrue(await node.enqueue(p1))
+            self.assertTrue(await node.enqueue(p2))
+            # Buffer size is 2, third enqueue should be dropped
+            self.assertFalse(await node.enqueue(p3))
+            self.assertEqual(node.drop_count, 1)
+            self.assertEqual(node.queue_length, 2)
+
+        asyncio.run(run())
+
+    def test_forwarding_loop_single_node_delivery(self):
+        async def run():
+            node_b = RouterNode("node-B")
+            node_b.start()
+
+            p = make_packet(source="node-A", destination="node-B")
+            await node_b.enqueue(p)
+
+            # Give event loop time to process packet in background task
+            await asyncio.sleep(0.05)
+            await node_b.stop()
+
+            self.assertEqual(len(node_b.delivered), 1)
+            self.assertEqual(node_b.delivered[0].packet_id, p.packet_id)
+            self.assertEqual(node_b.processed_count, 1)
+            self.assertGreaterEqual(node_b.average_wait_time, 0.0)
+
+        asyncio.run(run())
+
+    def test_multi_hop_forwarding_loop(self):
+        async def run():
+            a = RouterNode("node-A")
+            b = RouterNode("node-B")
+            c = RouterNode("node-C")
+
+            a.link_peer(b)
+            b.link_peer(c)
+            a.add_route("node-C", "node-B")
+
+            a.start()
+            b.start()
+            c.start()
+
+            p = make_packet(source="node-A", destination="node-C", ttl=10)
+            await a.enqueue(p)
+
+            await asyncio.sleep(0.1)
+
+            await a.stop()
+            await b.stop()
+            await c.stop()
+
+            self.assertEqual(len(c.delivered), 1)
+            delivered_packet = c.delivered[0]
+            self.assertEqual(delivered_packet.hop_history, ["node-A", "node-B"])
+            self.assertEqual(delivered_packet.ttl, 8)
+
+        asyncio.run(run())
+
+    def test_metrics_collection(self):
+        async def run():
+            node = RouterNode("node-A", buffer_size=10)
+            node.start()
+
+            p = make_packet(source="node-S", destination="node-A")
+            await node.enqueue(p)
+            await asyncio.sleep(0.02)
+            await node.stop()
+
+            metrics = node.get_metrics()
+            self.assertEqual(metrics["node_id"], "node-A")
+            self.assertEqual(metrics["buffer_size"], 10)
+            self.assertEqual(metrics["drop_count"], 0)
+            self.assertEqual(metrics["processed_count"], 1)
+            self.assertEqual(metrics["delivered_count"], 1)
+            self.assertGreaterEqual(metrics["average_wait_time"], 0.0)
 
         asyncio.run(run())
 

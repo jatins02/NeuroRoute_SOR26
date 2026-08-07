@@ -336,3 +336,214 @@ class BaseRouterNode(abc.ABC):
             f"queue={self.queue_length}/{self.buffer_size}, "
             f"routes={len(self._routing_table)})"
         )
+
+
+# --------------------------------------------------------------------------
+# Concrete RouterNode
+# --------------------------------------------------------------------------
+
+class RouterNode(BaseRouterNode):
+    """
+    Concrete asynchronous data-plane router node.
+
+    Features:
+      * Thread-safe packet queue (`asyncio.Queue`) inherited from `BaseRouterNode`.
+      * Asynchronous forwarding loop (`_forward_loop`) pulling packets from
+        the queue, querying routing policies, and delivering or pushing packets
+        to destination or next-hop peer nodes.
+      * Buffer overflow logic: drops packets and increments `drop_count` when
+        queue capacity is reached.
+      * Dynamic metric collection: queue depth, drop count, processed count,
+        and average queue wait time.
+    """
+
+    def __init__(
+        self,
+        node_id: str,
+        buffer_size: int = 1024,
+        processing_delay: float = 0.0,
+    ) -> None:
+        super().__init__(node_id, buffer_size=buffer_size)
+        self.processing_delay = float(processing_delay)
+        self.peers: Dict[str, RouterNode] = {}
+        self.delivered: List[Packet] = []
+
+        # Telemetry & metrics
+        self._drop_count: int = 0
+        self._processed_count: int = 0
+        self._total_wait_time: float = 0.0
+
+        # Runtime task management
+        self._running: bool = False
+        self._task: Optional[asyncio.Task] = None
+
+    # ---- Peer Management -----------------------------------------------
+
+    def link_peer(self, peer: "RouterNode", metric: int = 1) -> None:
+        """Connect a peer node and add a direct route to it."""
+        if not isinstance(peer, BaseRouterNode):
+            raise TypeError("peer must be an instance of BaseRouterNode")
+        self.peers[peer.node_id] = peer
+        self.add_route(peer.node_id, peer.node_id, metric=metric)
+
+    def unlink_peer(self, peer_id: str) -> None:
+        """Disconnect a peer node and remove its direct route."""
+        self.peers.pop(peer_id, None)
+        self.remove_route(peer_id)
+
+    # ---- Route Lookup --------------------------------------------------
+
+    def lookup_route(self, destination: str) -> Optional[RouteEntry]:
+        """
+        Resolve destination to a RouteEntry.
+        Supports exact destination match and prefix matching.
+        """
+        if destination in self._routing_table:
+            return self._routing_table[destination]
+
+        best_match: Optional[RouteEntry] = None
+        longest_len = -1
+        for prefix, entry in self._routing_table.items():
+            if destination.startswith(prefix) and len(prefix) > longest_len:
+                best_match = entry
+                longest_len = len(prefix)
+        return best_match
+
+    # ---- Queue & Overflow Management -----------------------------------
+
+    async def enqueue(self, packet: Packet) -> bool:
+        """
+        Attempt to place a packet on the inbound queue without blocking.
+        If the queue is full, the packet is dropped and drop_count is incremented.
+        """
+        if self._queue.full():
+            self._drop_count += 1
+            return False
+        await self._queue.put((packet, time.time()))
+        return True
+
+    async def dequeue(self) -> Packet:
+        """
+        Await and remove the next packet from the inbound queue.
+        Calculates queue wait time and updates metrics.
+        """
+        item = await self._queue.get()
+        if isinstance(item, tuple):
+            packet, arrival_time = item
+            wait_time = max(0.0, time.time() - arrival_time)
+            self._total_wait_time += wait_time
+            self._processed_count += 1
+            return packet
+        return item
+
+    # ---- Forwarding ----------------------------------------------------
+
+    async def forward(self, packet: Packet) -> Tuple[bool, Optional[str]]:
+        """
+        Forward `packet` toward its destination.
+
+        Returns (success, next_hop_node_id).
+        """
+        # Local delivery check
+        if packet.destination == self.node_id:
+            self.delivered.append(packet)
+            return True, None
+
+        # Route lookup
+        route = self.lookup_route(packet.destination)
+        if route is None:
+            self._drop_count += 1
+            return False, None
+
+        # Next hop peer lookup
+        peer = self.peers.get(route.next_hop)
+        if peer is None:
+            self._drop_count += 1
+            return False, None
+
+        # Update hop history and TTL
+        try:
+            updated_packet = packet.record_hop(self.node_id)
+        except PacketValidationError:
+            # Packet expired (TTL exhausted)
+            self._drop_count += 1
+            return False, None
+
+        # Forward to downstream peer queue
+        accepted = await peer.enqueue(updated_packet)
+        if not accepted:
+            # Downstream peer buffer was full (drop recorded on peer)
+            return False, route.next_hop
+
+        return True, route.next_hop
+
+    # ---- Async Forwarding Loop -----------------------------------------
+
+    async def _forward_loop(self) -> None:
+        """Worker loop running as an asyncio task to process inbound queue."""
+        while self._running:
+            try:
+                packet = await self.dequeue()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                continue
+
+            if self.processing_delay > 0:
+                await asyncio.sleep(self.processing_delay)
+
+            if packet.is_expired():
+                self._drop_count += 1
+                self._queue.task_done()
+                continue
+
+            await self.forward(packet)
+            self._queue.task_done()
+
+    # ---- Lifecycle -----------------------------------------------------
+
+    def start(self) -> None:
+        """Start the background forwarding loop."""
+        if not self._running:
+            self._running = True
+            self._task = asyncio.create_task(self._forward_loop())
+
+    async def stop(self) -> None:
+        """Stop the background forwarding loop gracefully."""
+        if self._running:
+            self._running = False
+            if self._task and not self._task.done():
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
+            self._task = None
+
+    # ---- Telemetry & Metrics -------------------------------------------
+
+    @property
+    def drop_count(self) -> int:
+        return self._drop_count
+
+    @property
+    def processed_count(self) -> int:
+        return self._processed_count
+
+    @property
+    def average_wait_time(self) -> float:
+        if self._processed_count == 0:
+            return 0.0
+        return self._total_wait_time / self._processed_count
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Return dynamic telemetry metrics dictionary."""
+        return {
+            "node_id": self.node_id,
+            "queue_depth": self.queue_length,
+            "buffer_size": self.buffer_size,
+            "drop_count": self.drop_count,
+            "processed_count": self.processed_count,
+            "average_wait_time": self.average_wait_time,
+            "delivered_count": len(self.delivered),
+        }
