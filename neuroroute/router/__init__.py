@@ -1,6 +1,8 @@
 from neuroroute.router.generator import TrafficGenerator, TrafficStream
 from neuroroute.router.plane import (
     BaseRouterNode,
+    FastQueue,
+    FastRouterNode,
     Packet,
     PacketValidationError,
     Priority,
@@ -10,6 +12,8 @@ from neuroroute.router.plane import (
 
 __all__ = [
     "BaseRouterNode",
+    "FastQueue",
+    "FastRouterNode",
     "Packet",
     "PacketValidationError",
     "Priority",
