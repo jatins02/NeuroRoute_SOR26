@@ -1,12 +1,19 @@
 """
-Tabular Q-Learning Agent for Network Routing.
+Agent module for Network Routing.
+Provides Tabular Q-Learning Agent (QLearningAgent) and PyTorch Deep Q-Network Agent (DQNAgent, DQNModel, ReplayBuffer).
 """
 
+import collections
 import json
 import os
-from typing import Optional, Union, List, Tuple, Dict, Any, Set
+import random
 from collections import defaultdict
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 
 class QLearningAgent:
@@ -210,3 +217,244 @@ class QLearningAgent:
         for key_str, q_vals_list in serialized.items():
             key_tuple = tuple(json.loads(key_str))
             self.q_table[key_tuple] = np.array(q_vals_list, dtype=np.float64)
+
+
+class ReplayBuffer:
+    """
+    Experience Replay Buffer storing transition tuples using fixed-size deque.
+    """
+
+    def __init__(self, capacity: int = 10000) -> None:
+        """
+        Initialize replay buffer with maximum capacity.
+
+        Args:
+            capacity: Maximum number of experience tuples to retain.
+        """
+        self.capacity = capacity
+        self.buffer = collections.deque(maxlen=capacity)
+
+    def push(
+        self,
+        state: Any,
+        action: int,
+        reward: float,
+        next_state: Any,
+        done: bool,
+    ) -> None:
+        """
+        Append experience tuple to buffer.
+
+        Args:
+            state: State vector or observation.
+            action: Action index.
+            reward: Scalar reward received.
+            next_state: Next state vector or observation.
+            done: Episode termination boolean indicator.
+        """
+        self.buffer.append((state, action, reward, next_state, done))
+
+    def sample(
+        self, batch_size: int
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Sample random minibatch of experiences converted to PyTorch FloatTensors.
+
+        Args:
+            batch_size: Number of transitions to sample.
+
+        Returns:
+            Tuple of (states, actions, rewards, next_states, dones) PyTorch Tensors.
+        """
+        batch = random.sample(self.buffer, batch_size)
+        states, actions, rewards, next_states, dones = zip(*batch)
+
+        states_t = torch.tensor(np.array(states, dtype=np.float32), dtype=torch.float32)
+        actions_t = torch.tensor(actions, dtype=torch.long)
+        rewards_t = torch.tensor(rewards, dtype=torch.float32)
+        next_states_t = torch.tensor(np.array(next_states, dtype=np.float32), dtype=torch.float32)
+        dones_t = torch.tensor(dones, dtype=torch.float32)
+
+        return states_t, actions_t, rewards_t, next_states_t, dones_t
+
+    def __len__(self) -> int:
+        """
+        Get current size of replay buffer.
+        """
+        return len(self.buffer)
+
+
+class DQNModel(nn.Module):
+    """
+    Lightweight PyTorch MLP for mapping state vector to action Q-values.
+    Sub-millisecond CPU execution architecture.
+    """
+
+    def __init__(self, state_dim: int, action_dim: int) -> None:
+        """
+        Initialize MLP network layers.
+
+        Args:
+            state_dim: Input dimension of state feature vector.
+            action_dim: Output dimension (number of discrete actions).
+        """
+        super().__init__()
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+
+        self.net = nn.Sequential(
+            nn.Linear(state_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, action_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass computing Q-values vector for input batch x.
+        """
+        return self.net(x)
+
+
+class DQNAgent:
+    """
+    Deep Q-Network (DQN) Agent for continuous observation spaces and discrete action selection.
+    Uses experience replay, target network stabilization, Huber loss, and action masking.
+    """
+
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        lr: float = 0.001,
+        gamma: float = 0.95,
+        epsilon: float = 1.0,
+        epsilon_decay: float = 0.995,
+        min_epsilon: float = 0.01,
+        buffer_capacity: int = 10000,
+        batch_size: int = 32,
+    ) -> None:
+        """
+        Initialize DQNAgent neural networks, target network, optimizer, and replay buffer.
+        """
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.lr = lr
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.epsilon_decay = epsilon_decay
+        self.min_epsilon = min_epsilon
+        self.batch_size = batch_size
+
+        self.policy_net = DQNModel(state_dim, action_dim)
+        self.target_net = DQNModel(state_dim, action_dim)
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval()
+
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
+        self.criterion = nn.SmoothL1Loss()
+        self.replay_buffer = ReplayBuffer(capacity=buffer_capacity)
+
+    def choose_action(
+        self,
+        state: Any,
+        valid_actions: Optional[Union[List[int], np.ndarray, Set[int], Tuple[int, ...]]] = None,
+    ) -> int:
+        """
+        Select action using epsilon-greedy policy with optional action masking.
+        Inference is wrapped in torch.no_grad() for maximum speed.
+
+        Args:
+            state: Continuous state vector or observation array.
+            valid_actions: List of valid action indices or boolean action mask array.
+
+        Returns:
+            Selected action index (int).
+        """
+        if valid_actions is not None:
+            if isinstance(valid_actions, np.ndarray) and valid_actions.dtype == bool:
+                valid_indices = np.where(valid_actions)[0]
+            elif isinstance(valid_actions, (list, set, tuple, np.ndarray)):
+                valid_indices = np.array(list(valid_actions), dtype=int)
+            else:
+                valid_indices = np.arange(self.action_dim)
+        else:
+            valid_indices = np.arange(self.action_dim)
+
+        if len(valid_indices) == 0:
+            valid_indices = np.arange(self.action_dim)
+
+        if np.random.random() < self.epsilon:
+            return int(np.random.choice(valid_indices))
+
+        state_t = torch.tensor(np.array(state, dtype=np.float32), dtype=torch.float32).unsqueeze(0)
+        with torch.no_grad():
+            q_values = self.policy_net(state_t).squeeze(0).numpy()
+
+        valid_q = q_values[valid_indices]
+        max_q = np.max(valid_q)
+        best_mask = np.isclose(valid_q, max_q)
+        best_actions = valid_indices[best_mask]
+
+        return int(np.random.choice(best_actions))
+
+    def update(self) -> Optional[float]:
+        """
+        Sample minibatch from ReplayBuffer, compute Smooth L1 (Huber) loss against target network,
+        perform backpropagation, update parameters, and decay epsilon.
+
+        Returns:
+            Computed scalar loss float value, or None if buffer size < batch_size.
+        """
+        if len(self.replay_buffer) < self.batch_size:
+            return None
+
+        states, actions, rewards, next_states, dones = self.replay_buffer.sample(self.batch_size)
+
+        # Compute Q(s, a) using policy_net
+        state_action_values = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+
+        # Compute max_a' Q_target(s', a') using target_net
+        with torch.no_grad():
+            next_state_values = self.target_net(next_states).max(dim=1)[0]
+            expected_state_action_values = rewards + (1.0 - dones) * self.gamma * next_state_values
+
+        loss = self.criterion(state_action_values, expected_state_action_values)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        # Decay epsilon
+        self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
+
+        return float(loss.item())
+
+    def update_target_network(self) -> None:
+        """
+        Copy parameters from policy_net to target_net.
+        """
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+
+    def save_model(self, filepath: str) -> None:
+        """
+        Save PyTorch policy network state dictionary to file.
+        """
+        dir_name = os.path.dirname(os.path.abspath(filepath))
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        torch.save(self.policy_net.state_dict(), filepath)
+
+    def load_model(self, filepath: str) -> None:
+        """
+        Load PyTorch policy network state dictionary from file and update target network.
+        """
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Model file not found: {filepath}")
+        try:
+            state_dict = torch.load(filepath, weights_only=True)
+        except Exception:
+            state_dict = torch.load(filepath)
+        self.policy_net.load_state_dict(state_dict)
+        self.update_target_network()

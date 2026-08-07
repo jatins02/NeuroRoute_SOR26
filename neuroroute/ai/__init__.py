@@ -1,9 +1,15 @@
 ""
 """
-NeuroRoute AI module exporting gymnasium routing environment and Q-learning agent.
+NeuroRoute AI module exporting gymnasium routing environment, Q-learning agent, and PyTorch DQN agent components.
 """
 
+from neuroroute.ai.agent import DQNAgent, DQNModel, QLearningAgent, ReplayBuffer
 from neuroroute.ai.env import NetworkRoutingEnv
-from neuroroute.ai.agent import QLearningAgent
 
-__all__ = ["NetworkRoutingEnv", "QLearningAgent"]
+__all__ = [
+    "NetworkRoutingEnv",
+    "QLearningAgent",
+    "DQNAgent",
+    "DQNModel",
+    "ReplayBuffer",
+]
