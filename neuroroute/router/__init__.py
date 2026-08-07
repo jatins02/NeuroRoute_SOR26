@@ -1,3 +1,4 @@
+from neuroroute.router.generator import TrafficGenerator, TrafficStream
 from neuroroute.router.plane import (
     BaseRouterNode,
     Packet,
@@ -14,4 +15,6 @@ __all__ = [
     "Priority",
     "RouteEntry",
     "RouterNode",
+    "TrafficGenerator",
+    "TrafficStream",
 ]
