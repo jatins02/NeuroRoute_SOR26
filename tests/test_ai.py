@@ -1,21 +1,32 @@
 """
-Comprehensive unit tests for neuroroute.ai module: NetworkRoutingEnv and QLearningAgent.
+Comprehensive unit tests for neuroroute.ai module: NetworkRoutingEnv, QLearningAgent, and DQNAgent.
 """
 
 import os
+import random
 import numpy as np
 import pytest
+import torch
 import gymnasium as gym
 
 from neuroroute.ai.env import NetworkRoutingEnv
-from neuroroute.ai.agent import QLearningAgent
-from neuroroute.ai import NetworkRoutingEnv as ExportedEnv, QLearningAgent as ExportedAgent
+from neuroroute.ai.agent import QLearningAgent, DQNAgent, DQNModel, ReplayBuffer
+from neuroroute.ai import (
+    NetworkRoutingEnv as ExportedEnv,
+    QLearningAgent as ExportedQL,
+    DQNAgent as ExportedDQN,
+    DQNModel as ExportedModel,
+    ReplayBuffer as ExportedBuffer,
+)
 
 
 def test_imports_and_exports():
     """Verify classes are exported properly from neuroroute.ai."""
     assert ExportedEnv is NetworkRoutingEnv
-    assert ExportedAgent is QLearningAgent
+    assert ExportedQL is QLearningAgent
+    assert ExportedDQN is DQNAgent
+    assert ExportedModel is DQNModel
+    assert ExportedBuffer is ReplayBuffer
 
 
 def test_env_initialization_and_spaces():
@@ -75,7 +86,6 @@ def test_env_step_valid_action_and_reward():
 
 def test_env_invalid_action_penalty():
     """Test execution of invalid actions demonstrating heavy penalty and state retention."""
-    # Define custom topology where node 0 is only connected to node 1 (link to node 3 does not exist)
     topology = {
         0: {1: {"latency": 10.0}},
         1: {0: {"latency": 10.0}, 2: {"latency": 15.0}},
@@ -91,11 +101,10 @@ def test_env_invalid_action_penalty():
     # Action 3 is invalid from node 0
     obs, reward, terminated, truncated, info = env.step(3)
 
-    # Check heavy penalty enforcement
     assert reward == -100.0
     assert terminated is False
     assert env.dropped_packets == 1
-    assert info["current_node"] == 0  # State remains unchanged
+    assert info["current_node"] == 0
     assert "error" in info
 
     env.close()
@@ -136,13 +145,11 @@ def test_agent_initialization_and_quantization():
     assert agent.discount_factor == 0.95
     assert agent.epsilon == 1.0
 
-    # Quantization test on vector state
     state_arr = np.array([0.23, 1.0, 4.0, 15.2], dtype=np.float32)
     q_tuple = agent.quantize_state(state_arr)
     assert isinstance(q_tuple, tuple)
     assert len(q_tuple) == len(state_arr)
 
-    # Quantization test on dict state
     dict_state = {"current": 0, "dest": 4}
     q_dict_tuple = agent.quantize_state(dict_state)
     assert isinstance(q_dict_tuple, tuple)
@@ -150,22 +157,18 @@ def test_agent_initialization_and_quantization():
 
 def test_agent_choose_action_with_masking():
     """Test epsilon-greedy action selection and action masking."""
-    agent = QLearningAgent(num_states=10, num_actions=5, epsilon=0.0)  # Pure exploitation
+    agent = QLearningAgent(num_states=10, num_actions=5, epsilon=0.0)
 
-    # Set custom Q-values for state (0,)
     state = (0,)
     q_values = np.array([1.0, 10.0, 3.0, 0.0, 8.0])
     agent.q_table[state] = q_values
 
-    # Action choice without mask -> index 1 (max value 10.0)
     action_unmasked = agent.choose_action(state)
     assert action_unmasked == 1
 
-    # Action choice with mask restricting to actions [0, 3, 4] -> index 4 (max among valid is 8.0)
     action_masked_list = agent.choose_action(state, valid_actions=[0, 3, 4])
     assert action_masked_list == 4
 
-    # Action choice with boolean mask array [True, False, False, False, False] -> index 0
     bool_mask = np.array([True, False, False, False, False])
     action_masked_bool = agent.choose_action(state, valid_actions=bool_mask)
     assert action_masked_bool == 0
@@ -188,33 +191,22 @@ def test_agent_q_table_bellman_update():
     action = 2
     reward = 10.0
 
-    # Next state Q-values: set max Q(s') to 20.0 at action 0
     agent.q_table[next_state] = np.array([20.0, 5.0, 0.0, 0.0])
-
-    # Initial Q(s, a) is 0.0
     assert agent.q_table[state][action] == 0.0
 
-    # Bellman update: Target = reward + discount * max(Q(s')) = 10.0 + 0.9 * 20.0 = 28.0
-    # New Q(s, a) = 0.0 + 0.1 * (28.0 - 0.0) = 2.8
     td_error = agent.update(state, action, reward, next_state, done=False)
 
     assert pytest.approx(td_error, abs=1e-5) == 28.0
     assert pytest.approx(agent.q_table[state][action], abs=1e-5) == 2.8
-
-    # Epsilon decay check: 1.0 * 0.9 = 0.9
     assert pytest.approx(agent.epsilon, abs=1e-5) == 0.9
 
-    # Terminal state update check
     td_error_term = agent.update(state, action, reward=5.0, next_state=next_state, done=True)
-    # Target = 5.0 (done=True), New Q = 2.8 + 0.1 * (5.0 - 2.8) = 3.02
     assert pytest.approx(agent.q_table[state][action], abs=1e-5) == 3.02
 
 
 def test_agent_save_and_load_q_table(tmp_path):
     """Test serializing and deserializing Q-table to/from JSON."""
     agent_save = QLearningAgent(num_states=10, num_actions=4)
-
-    # Populate Q-table
     agent_save.q_table[(0, 1)] = np.array([1.5, 2.5, 3.5, 4.5])
     agent_save.q_table[(2, 3)] = np.array([0.1, 0.2, 0.3, 0.4])
 
@@ -223,7 +215,6 @@ def test_agent_save_and_load_q_table(tmp_path):
 
     assert os.path.exists(json_path)
 
-    # Load into fresh agent
     agent_load = QLearningAgent(num_states=10, num_actions=4)
     agent_load.load_q_table(json_path)
 
@@ -231,3 +222,101 @@ def test_agent_save_and_load_q_table(tmp_path):
     assert (2, 3) in agent_load.q_table
     np.testing.assert_allclose(agent_load.q_table[(0, 1)], np.array([1.5, 2.5, 3.5, 4.5]))
     np.testing.assert_allclose(agent_load.q_table[(2, 3)], np.array([0.1, 0.2, 0.3, 0.4]))
+
+
+# --- DQNAgent and ReplayBuffer Unit Tests ---
+
+def test_replay_buffer_push_and_sample():
+    """Test ReplayBuffer capacity, pushing, and tensor conversion shapes."""
+    buffer = ReplayBuffer(capacity=100)
+    state_dim = 11
+
+    for i in range(50):
+        s = np.random.randn(state_dim).astype(np.float32)
+        a = i % 5
+        r = float(i)
+        ns = np.random.randn(state_dim).astype(np.float32)
+        d = (i % 10 == 0)
+        buffer.push(s, a, r, ns, d)
+
+    assert len(buffer) == 50
+
+    batch_size = 16
+    states, actions, rewards, next_states, dones = buffer.sample(batch_size)
+
+    assert isinstance(states, torch.Tensor)
+    assert states.shape == (batch_size, state_dim)
+    assert isinstance(actions, torch.Tensor)
+    assert actions.shape == (batch_size,)
+    assert isinstance(rewards, torch.Tensor)
+    assert rewards.shape == (batch_size,)
+    assert isinstance(next_states, torch.Tensor)
+    assert next_states.shape == (batch_size, state_dim)
+    assert isinstance(dones, torch.Tensor)
+    assert dones.shape == (batch_size,)
+
+
+def test_dqn_agent_action_selection_and_masking():
+    """Test DQNAgent action selection with torch.no_grad context and valid action mask."""
+    state_dim = 11
+    action_dim = 5
+    agent = DQNAgent(state_dim=state_dim, action_dim=action_dim, epsilon=0.0)
+
+    obs = np.zeros(state_dim, dtype=np.float32)
+
+    # Choose action without mask
+    action = agent.choose_action(obs)
+    assert 0 <= action < action_dim
+
+    # Choose action with mask [0, 2, 4]
+    valid_list = [0, 2, 4]
+    action_masked = agent.choose_action(obs, valid_actions=valid_list)
+    assert action_masked in valid_list
+
+    # Choose action with boolean mask [False, True, False, False, False] -> must select index 1
+    bool_mask = np.array([False, True, False, False, False])
+    action_bool = agent.choose_action(obs, valid_actions=bool_mask)
+    assert action_bool == 1
+
+
+def test_dqn_agent_update():
+    """Test DQNAgent update step computes loss and decays epsilon."""
+    state_dim = 4
+    action_dim = 2
+    batch_size = 8
+    agent = DQNAgent(state_dim=state_dim, action_dim=action_dim, batch_size=batch_size, epsilon=1.0)
+
+    # Buffer < batch_size should return None
+    assert agent.update() is None
+
+    # Fill replay buffer
+    for _ in range(20):
+        s = np.random.randn(state_dim).astype(np.float32)
+        a = random.randint(0, action_dim - 1)
+        r = random.random()
+        ns = np.random.randn(state_dim).astype(np.float32)
+        d = False
+        agent.replay_buffer.push(s, a, r, ns, d)
+
+    loss = agent.update()
+    assert isinstance(loss, float)
+    assert loss >= 0.0
+    assert agent.epsilon < 1.0
+
+
+def test_dqn_agent_save_and_load_model(tmp_path):
+    """Test saving and loading PyTorch weights (.pth)."""
+    state_dim = 6
+    action_dim = 3
+    agent_save = DQNAgent(state_dim=state_dim, action_dim=action_dim)
+
+    model_path = os.path.join(tmp_path, "dqn_weights.pth")
+    agent_save.save_model(model_path)
+    assert os.path.exists(model_path)
+
+    agent_load = DQNAgent(state_dim=state_dim, action_dim=action_dim)
+    agent_load.load_model(model_path)
+
+    # Verify weights match
+    for p1, p2 in zip(agent_save.policy_net.parameters(), agent_load.policy_net.parameters()):
+        np.testing.assert_allclose(p1.detach().numpy(), p2.detach().numpy())
