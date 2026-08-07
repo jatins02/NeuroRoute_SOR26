@@ -1,96 +1,108 @@
 import json
-import yaml
-import os
-from typing import Optional
+from typing import Any, Optional
 
 
 class TopologyManager:
-    def __init__(self):
-        # graph format: {source: {dest: {"latency" : float, "bandwidth" : float}}}
-        self.graph : dict[str, dict[str, dict[float, float]]] = {}
 
-    def load_topology(self, location) -> None:
-        # check if filepath exists
-        if not os.path.exists(location):
-            raise FileNotFoundError(f"Filepath {location} doesn't exist.")
+  def __init__(self) -> None:
+    self.graph: dict[str, dict[str, dict[str, Any]]] = {}
 
-        # get extension of filepath
-        ext = os.path.splitext(location)[1].lower()
-        # print(ext)
+  def load_topology(self, filepath: str) -> None:
+    """Loads network topology from a JSON file."""
+    with open(filepath, "r") as f:
+      data = json.load(f)
 
-        # open file and load data according to extension
-        with open(location, "r") as f:
-            if ext == ".json":
-                data = json.load(f)
-            elif ext in (".yaml", ".yml"):
-                data = yaml.safe_load(f)
-            else:
-                raise ValueError(f"Unsupported file format: {ext}")
+    self.graph.clear()
+    for node in data.get("nodes", []):
+      if node not in self.graph:
+        self.graph[node] = {}
 
-        self.__build_graph(data)
+    for link in data.get("links", []):
+      src = link["from"]
+      dst = link["to"]
+      latency = float(link.get("latency", 1.0))
+      bandwidth = float(link.get("bandwidth", 100.0))
+      self.add_link(src, dst, latency=latency, bandwidth=bandwidth)
 
-    # private method
-    def __build_graph(self, data: dict) -> None:
-        # turns topology json data into graph format
-        self.graph.clear()
+  def add_link(
+      self,
+      start: str,
+      end: str,
+      latency: float = 1.0,
+      bandwidth: float = 100.0,
+      active: bool = True,
+  ) -> None:
+    """Adds or updates a directed link with active status tracking."""
+    if start not in self.graph:
+      self.graph[start] = {}
+    if end not in self.graph:
+      self.graph[end] = {}
 
-        # initialise empty dicts for each node
-        for node in data.get("nodes", []):
-            self.graph[node] = {}
+    self.graph[start][end] = {
+        "latency": latency,
+        "base_latency": latency,
+        "bandwidth": bandwidth,
+        "active": active,
+    }
 
-        for link in data.get("links", []):
-            # get link parameters
-            start, dest = link["from"], link["to"]
-            latency, bandwidth = float(link.get("latency", 0)), float(link.get("bandwidth", 0))
+  def update_link(
+      self,
+      start: str,
+      end: str,
+      latency: Optional[float] = None,
+      bandwidth: Optional[float] = None,
+      active: Optional[bool] = None,
+  ) -> None:
+    """Updates specific link metrics dynamically."""
+    if start in self.graph and end in self.graph[start]:
+      link = self.graph[start][end]
+      if latency is not None:
+        link["latency"] = latency
+        link["base_latency"] = latency
+      if bandwidth is not None:
+        link["bandwidth"] = bandwidth
+      if active is not None:
+        link["active"] = active
 
-            # set link parameters in graph
-            self.graph[start][dest] = {"latency": latency, "bandwidth": bandwidth}
+  def set_link_status(self, start: str, end: str, active: bool) -> bool:
+    """Enables or disables a specific link."""
+    if start in self.graph and end in self.graph[start]:
+      self.graph[start][end]["active"] = active
+      return True
+    return False
 
-    def is_connected(self, start : str, end : str) -> bool:
-        # check if node is connected on the graph
-        return end in self.graph.get(start, {})
+  def apply_latency_spike(
+      self, start: str, end: str, chaos_factor: float
+  ) -> bool:
+    """Multiplies link latency by a chaos factor."""
+    if start in self.graph and end in self.graph[start]:
+      link = self.graph[start][end]
+      link["latency"] = link["base_latency"] * chaos_factor
+      return True
+    return False
 
-    def get_neighbours(self, node : str) -> list[str]:
-        # returns list of outgoing neighbours
-        return list(self.graph.get(node, {}).keys())
+  def restore_link_latency(self, start: str, end: str) -> bool:
+    """Restores link latency back to its base value."""
+    if start in self.graph and end in self.graph[start]:
+      link = self.graph[start][end]
+      link["latency"] = link["base_latency"]
+      return True
+    return False
 
-    def get_all_nodes(self) -> list[str]:
-        # returns list of all node ids in the graph
-        return list(self.graph.keys())
+  def get_neighbours(self, node: str) -> list[str]:
+    """Returns adjacent neighbor nodes connected via active links."""
+    if node not in self.graph:
+      return []
+    return [
+        neighbor
+        for neighbor, metrics in self.graph[node].items()
+        if metrics.get("active", True)
+    ]
 
-    def get_link_metrics(self, start: str, end: str) -> dict[float, float]:
-        if not self.is_connected(start, end):
-            # this link doesn't exist on graph
-            raise KeyError(f"No direct link between {start} and {end}")
-
-        return self.graph[start][end]
-
-    def update_link(self, start : str, end: str, latency: Optional[float] = None, bandwidth: Optional[float] = None) -> None:
-        # if the link doesn't exist, raise KeyError
-        if not self.is_connected(start, end):
-            raise KeyError(f"No direct link between {start} and {end}")
-
-        if latency is not None:
-            self.graph[start][end]["latency"] = float(latency)
-        if bandwidth is not None:
-            self.graph[start][end]["bandwidth"] = float(bandwidth)
-
-    # utility function
-    def print_graph(self):
-        for start in self.graph.keys():
-            # self.graph[start], is the assigned dict
-            for dest, params in self.graph[start].items():
-                print(f"{start} -> {dest}: (latency: {params["latency"]}, bandwidth: {params["bandwidth"]})")
-            print()
-
-
-# instantiation and testing
-# top = TopologyManager()
-# top.load_topology("configs/square-topology.json")
-# top.print_graph()
-
-"""testing TopologyManager class functions"""
-# top.update_link("nodeA", "nodeB", 44, 122)
-# print(top.get_link_metrics("nodeA", "nodeB"))
-# print(top.get_neighbours("nodeB"))
-# top.print_graph()
+  def get_all_links(self) -> list[tuple[str, str]]:
+    """Returns list of all directed link tuples (src, dst)."""
+    links = []
+    for src, neighbors in self.graph.items():
+      for dst in neighbors:
+        links.append((src, dst))
+    return links
