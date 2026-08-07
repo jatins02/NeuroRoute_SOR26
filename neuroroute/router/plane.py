@@ -354,29 +354,33 @@ class SimRouterNode(BaseRouterNode):
     def __init__(
         self,
         node_id: str,
-        topology_manager: Any,
-        strategy: Any,
+        topology_manager: Any = None,
+        strategy: Any = None,
         buffer_size: int = 1024,
+        processing_delay: float = 0.0,
     ) -> None:
         super().__init__(node_id, buffer_size=buffer_size)
         self.topology_manager = topology_manager
         self.strategy = strategy
+        self.processing_delay = float(processing_delay)
         self.peers: Dict[str, BaseRouterNode] = {}
+        self.delivered: List[Packet] = []
 
-<<<<<<< HEAD
+        # Route lookup cache for O(1) fast-path routing
+        self._route_cache: Dict[str, Optional[RouteEntry]] = {}
+
+        # Telemetry & metrics
+        self._drop_count: int = 0
+        self._processed_count: int = 0
+        self._total_wait_time: float = 0.0
+
+        # Runtime task management
+        self._running: bool = False
+        self._task: Optional[asyncio.Task] = None
+
     def set_peers(self, peers: Dict[str, BaseRouterNode]) -> None:
         """Register reference to all peer router nodes in the network."""
         self.peers = peers
-
-    def lookup_route(self, destination: str) -> Optional[RouteEntry]:
-        """Resolve next hop using assigned strategy."""
-        next_hop = self.strategy.get_next_hop(self.node_id, destination)
-        if next_hop:
-            return RouteEntry(destination_prefix=destination, next_hop=next_hop)
-        return None
-=======
-        # Route lookup cache for O(1) fast-path routing
-        self._route_cache: Dict[str, Optional[RouteEntry]] = {}
 
         # Telemetry & metrics
         self._drop_count: int = 0
@@ -410,6 +414,13 @@ class SimRouterNode(BaseRouterNode):
         """
         if destination in self._route_cache:
             return self._route_cache[destination]
+
+        if self.strategy:
+            next_hop = self.strategy.get_next_hop(self.node_id, destination)
+            if next_hop:
+                res = RouteEntry(destination_prefix=destination, next_hop=next_hop)
+                self._route_cache[destination] = res
+                return res
 
         if destination in self._routing_table:
             res = self._routing_table[destination]
@@ -453,21 +464,36 @@ class SimRouterNode(BaseRouterNode):
         return item
 
     # ---- Forwarding ----------------------------------------------------
->>>>>>> 08746b5 (18)
 
     async def forward(self, packet: Packet) -> Tuple[bool, Optional[str]]:
         """Forward packet to destination or next hop peer."""
         if packet.destination == self.node_id:
+            if packet not in self.delivered:
+                self.delivered.append(packet)
             return True, None
 
-        next_hop = self.strategy.get_next_hop(self.node_id, packet.destination)
+        route = self.lookup_route(packet.destination)
+        if route is None:
+            self._drop_count += 1
+            return False, None
+
+        next_hop = route.next_hop
         if not next_hop or next_hop not in self.peers:
+            self._drop_count += 1
             return False, None
 
         peer_node = self.peers[next_hop]
-        success = await peer_node.enqueue(packet)
+
+        try:
+            updated_packet = packet.record_hop(self.node_id)
+        except PacketValidationError:
+            self._drop_count += 1
+            return False, None
+
+        success = await peer_node.enqueue(updated_packet)
         if success:
             return True, next_hop
+        self._drop_count += 1
         return False, None
 
     async def run(self, stop_event: asyncio.Event, stats: Dict[str, Any]) -> None:
@@ -516,6 +542,53 @@ class SimRouterNode(BaseRouterNode):
             if not success:
                 if hasattr(self, "stats") and isinstance(self.stats, dict):
                     self.stats["packets_dropped"] += 1
+    async def _forward_loop(self) -> None:
+        """Worker loop running as an asyncio task to process inbound queue."""
+        while self._running:
+            try:
+                packet = await self.dequeue()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                continue
+
+            if self.processing_delay > 0:
+                await asyncio.sleep(self.processing_delay)
+
+            if packet.is_expired():
+                self._drop_count += 1
+                if hasattr(self, "_queue") and hasattr(self._queue, "task_done"):
+                    try:
+                        self._queue.task_done()
+                    except Exception:
+                        pass
+                continue
+
+            await self.forward(packet)
+            if hasattr(self, "_queue") and hasattr(self._queue, "task_done"):
+                try:
+                    self._queue.task_done()
+                except Exception:
+                    pass
+
+    def start(self) -> None:
+        """Start the background forwarding loop."""
+        if not self._running:
+            self._running = True
+            self._task = asyncio.create_task(self._forward_loop())
+
+    async def stop(self) -> None:
+        """Stop the background forwarding loop gracefully."""
+        if self._running:
+            self._running = False
+            if self._task and not self._task.done():
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
+            self._task = None
+
     @property
     def drop_count(self) -> int:
         return self._drop_count
@@ -541,6 +614,9 @@ class SimRouterNode(BaseRouterNode):
             "average_wait_time": self.average_wait_time,
             "delivered_count": len(self.delivered),
         }
+
+
+RouterNode = SimRouterNode
 
 
 # --------------------------------------------------------------------------

@@ -16,7 +16,6 @@ from typing import Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from router.plane import (  # noqa: E402
 from neuroroute.router.plane import (  # noqa: E402
     BaseRouterNode,
     Packet,
