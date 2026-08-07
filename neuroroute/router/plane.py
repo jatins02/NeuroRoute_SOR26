@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import abc
@@ -430,4 +428,4 @@ class SimRouterNode(BaseRouterNode):
 
             success, _ = await self.forward(updated_packet)
             if not success:
-                stats["packets_dropped"] += 1
+                stats["packets_dropped"] += 1
