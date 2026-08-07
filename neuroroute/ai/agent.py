@@ -1,6 +1,7 @@
 """
 Agent module for Network Routing.
-Provides Tabular Q-Learning Agent (QLearningAgent) and PyTorch Deep Q-Network Agent (DQNAgent, DQNModel, ReplayBuffer).
+Provides Tabular Q-Learning Agent (QLearningAgent), PyTorch Deep Q-Network Agent (DQNAgent, DQNModel, ReplayBuffer),
+TorchScript/inference optimization, batch execution, and pure NumPy fast path execution.
 """
 
 import collections
@@ -34,15 +35,6 @@ class QLearningAgent:
     ) -> None:
         """
         Initialize Q-Learning agent hyperparameters and Q-table.
-
-        Args:
-            num_states: Discrete bin count for continuous state quantization.
-            num_actions: Number of available actions in the environment.
-            learning_rate: Alpha learning rate hyperparameter.
-            discount_factor: Gamma discount factor for future rewards.
-            epsilon: Initial exploration probability.
-            epsilon_decay: Multiplicative decay factor per step/episode.
-            min_epsilon: Lower bound threshold for epsilon.
         """
         self.num_states = num_states
         self.num_actions = num_actions
@@ -52,7 +44,6 @@ class QLearningAgent:
         self.epsilon_decay = epsilon_decay
         self.min_epsilon = min_epsilon
 
-        # Internal Q-table mapping discrete tuple state -> np.ndarray Q-values
         self.q_table: Dict[Tuple, np.ndarray] = defaultdict(
             lambda: np.zeros(self.num_actions, dtype=np.float64)
         )
@@ -60,12 +51,6 @@ class QLearningAgent:
     def quantize_state(self, state: Any) -> Tuple:
         """
         Convert continuous observation array or structure into discrete tuple representation.
-
-        Args:
-            state: Continuous vector, dict, or scalar state representation.
-
-        Returns:
-            Hashable tuple key suitable for Q-table lookup.
         """
         if isinstance(state, tuple):
             return state
@@ -102,17 +87,9 @@ class QLearningAgent:
     ) -> int:
         """
         Choose action using epsilon-greedy policy with optional action masking.
-
-        Args:
-            state: Environment state observation.
-            valid_actions: List of valid action indices or boolean action mask array.
-
-        Returns:
-            Selected action index (int).
         """
         q_key = self.quantize_state(state)
 
-        # Parse valid action indices
         if valid_actions is not None:
             if isinstance(valid_actions, np.ndarray) and valid_actions.dtype == bool:
                 valid_indices = np.where(valid_actions)[0]
@@ -126,12 +103,9 @@ class QLearningAgent:
         if len(valid_indices) == 0:
             valid_indices = np.arange(self.num_actions)
 
-        # Epsilon-greedy action selection
         if np.random.random() < self.epsilon:
-            # Exploration
             return int(np.random.choice(valid_indices))
         else:
-            # Exploitation: select action with maximum Q-value among valid actions
             q_values = self.q_table[q_key]
             valid_q = q_values[valid_indices]
             max_q = np.max(valid_q)
@@ -149,18 +123,6 @@ class QLearningAgent:
     ) -> float:
         """
         Update Q-table value using the standard Bellman equation and decay epsilon.
-
-        Q(s, a) <- Q(s, a) + alpha * [ r + gamma * max_a' Q(s', a') - Q(s, a) ]
-
-        Args:
-            state: Current state.
-            action: Action taken.
-            reward: Reward received.
-            next_state: Next state.
-            done: Whether episode terminated.
-
-        Returns:
-            TD error float value.
         """
         s_key = self.quantize_state(state)
         s_prime_key = self.quantize_state(next_state)
@@ -176,7 +138,6 @@ class QLearningAgent:
         td_error = target - q_s[action]
         q_s[action] += self.learning_rate * td_error
 
-        # Decay epsilon down to min_epsilon threshold
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
 
         return float(td_error)
@@ -184,9 +145,6 @@ class QLearningAgent:
     def save_q_table(self, filepath: str) -> None:
         """
         Serialize Q-table dictionary to JSON file format.
-
-        Args:
-            filepath: Destination file path.
         """
         serialized = {}
         for key, q_vals in self.q_table.items():
@@ -203,9 +161,6 @@ class QLearningAgent:
     def load_q_table(self, filepath: str) -> None:
         """
         Deserialize Q-table dictionary from JSON file format.
-
-        Args:
-            filepath: Source JSON file path.
         """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Q-table file not found: {filepath}")
@@ -227,9 +182,6 @@ class ReplayBuffer:
     def __init__(self, capacity: int = 10000) -> None:
         """
         Initialize replay buffer with maximum capacity.
-
-        Args:
-            capacity: Maximum number of experience tuples to retain.
         """
         self.capacity = capacity
         self.buffer = collections.deque(maxlen=capacity)
@@ -244,13 +196,6 @@ class ReplayBuffer:
     ) -> None:
         """
         Append experience tuple to buffer.
-
-        Args:
-            state: State vector or observation.
-            action: Action index.
-            reward: Scalar reward received.
-            next_state: Next state vector or observation.
-            done: Episode termination boolean indicator.
         """
         self.buffer.append((state, action, reward, next_state, done))
 
@@ -259,12 +204,6 @@ class ReplayBuffer:
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Sample random minibatch of experiences converted to PyTorch FloatTensors.
-
-        Args:
-            batch_size: Number of transitions to sample.
-
-        Returns:
-            Tuple of (states, actions, rewards, next_states, dones) PyTorch Tensors.
         """
         batch = random.sample(self.buffer, batch_size)
         states, actions, rewards, next_states, dones = zip(*batch)
@@ -293,10 +232,6 @@ class DQNModel(nn.Module):
     def __init__(self, state_dim: int, action_dim: int) -> None:
         """
         Initialize MLP network layers.
-
-        Args:
-            state_dim: Input dimension of state feature vector.
-            action_dim: Output dimension (number of discrete actions).
         """
         super().__init__()
         self.state_dim = state_dim
@@ -317,10 +252,71 @@ class DQNModel(nn.Module):
         return self.net(x)
 
 
+class NumPyFastPath:
+    """
+    Pure NumPy BLAS execution engine for PyTorch policy network weights.
+    Bypasses autograd and PyTorch framework overhead completely for microsecond latency.
+    """
+
+    def __init__(self, w1: np.ndarray, b1: np.ndarray, w2: np.ndarray, b2: np.ndarray, w3: np.ndarray, b3: np.ndarray) -> None:
+        self.w1 = w1.T.copy()
+        self.b1 = b1.copy()
+        self.w2 = w2.T.copy()
+        self.b2 = b2.copy()
+        self.w3 = w3.T.copy()
+        self.b3 = b3.copy()
+
+    def predict_q_values(self, states: Union[np.ndarray, List[float]]) -> np.ndarray:
+        """
+        Execute forward pass using BLAS matrix multiplication.
+        """
+        x = np.asarray(states, dtype=np.float32)
+        single = (x.ndim == 1)
+        if single:
+            x = x[np.newaxis, :]
+
+        h1 = np.maximum(0.0, x @ self.w1 + self.b1)
+        h2 = np.maximum(0.0, h1 @ self.w2 + self.b2)
+        q = h2 @ self.w3 + self.b3
+
+        return q[0] if single else q
+
+    def choose_action(
+        self,
+        state: np.ndarray,
+        valid_actions: Optional[Union[List[int], np.ndarray, Set[int], Tuple[int, ...]]] = None,
+    ) -> int:
+        """
+        Select action using pure NumPy Q-values calculation.
+        """
+        q_vals = self.predict_q_values(state)
+        action_dim = len(q_vals)
+
+        if valid_actions is not None:
+            if isinstance(valid_actions, np.ndarray) and valid_actions.dtype == bool:
+                valid_indices = np.where(valid_actions)[0]
+            elif isinstance(valid_actions, (list, set, tuple, np.ndarray)):
+                valid_indices = np.array(list(valid_actions), dtype=int)
+            else:
+                valid_indices = np.arange(action_dim)
+        else:
+            valid_indices = np.arange(action_dim)
+
+        if len(valid_indices) == 0:
+            valid_indices = np.arange(action_dim)
+
+        valid_q = q_vals[valid_indices]
+        max_q = np.max(valid_q)
+        best_mask = np.isclose(valid_q, max_q)
+        best_actions = valid_indices[best_mask]
+        return int(np.random.choice(best_actions))
+
+
 class DQNAgent:
     """
     Deep Q-Network (DQN) Agent for continuous observation spaces and discrete action selection.
-    Uses experience replay, target network stabilization, Huber loss, and action masking.
+    Supports TorchScript tracing (`optimize_for_inference`), batch inference (`choose_action_batch`),
+    and NumPy fast path execution (`export_to_numpy_fastpath`).
     """
 
     def __init__(
@@ -352,9 +348,28 @@ class DQNAgent:
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
 
+        self.traced_policy_net: Optional[Any] = None
+        self.is_optimized: bool = False
+
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
         self.criterion = nn.SmoothL1Loss()
         self.replay_buffer = ReplayBuffer(capacity=buffer_capacity)
+
+    def optimize_for_inference(self, dummy_input: Optional[torch.Tensor] = None) -> None:
+        """
+        JIT trace policy network for zero-overhead inference execution using TorchScript.
+        """
+        self.policy_net.eval()
+        if dummy_input is None:
+            dummy_input = torch.zeros((1, self.state_dim), dtype=torch.float32)
+
+        try:
+            traced = torch.jit.trace(self.policy_net, dummy_input)
+            self.traced_policy_net = torch.jit.optimize_for_inference(traced)
+        except Exception:
+            self.traced_policy_net = torch.jit.trace(self.policy_net, dummy_input)
+
+        self.is_optimized = True
 
     def choose_action(
         self,
@@ -363,14 +378,7 @@ class DQNAgent:
     ) -> int:
         """
         Select action using epsilon-greedy policy with optional action masking.
-        Inference is wrapped in torch.no_grad() for maximum speed.
-
-        Args:
-            state: Continuous state vector or observation array.
-            valid_actions: List of valid action indices or boolean action mask array.
-
-        Returns:
-            Selected action index (int).
+        Inference is wrapped in torch.inference_mode() for minimal framework overhead.
         """
         if valid_actions is not None:
             if isinstance(valid_actions, np.ndarray) and valid_actions.dtype == bool:
@@ -388,9 +396,16 @@ class DQNAgent:
         if np.random.random() < self.epsilon:
             return int(np.random.choice(valid_indices))
 
-        state_t = torch.tensor(np.array(state, dtype=np.float32), dtype=torch.float32).unsqueeze(0)
-        with torch.no_grad():
-            q_values = self.policy_net(state_t).squeeze(0).numpy()
+        state_arr = np.asarray(state, dtype=np.float32)
+        if state_arr.ndim == 1:
+            state_t = torch.from_numpy(state_arr).unsqueeze(0)
+        else:
+            state_t = torch.from_numpy(state_arr)
+
+        model_to_use = self.traced_policy_net if self.traced_policy_net is not None else self.policy_net
+
+        with torch.inference_mode():
+            q_values = model_to_use(state_t).squeeze(0).cpu().numpy()
 
         valid_q = q_values[valid_indices]
         max_q = np.max(valid_q)
@@ -399,23 +414,92 @@ class DQNAgent:
 
         return int(np.random.choice(best_actions))
 
+    def choose_action_batch(
+        self,
+        states: Union[np.ndarray, torch.Tensor],
+        valid_action_masks: Optional[Union[np.ndarray, List[Any]]] = None,
+    ) -> np.ndarray:
+        """
+        Execute vector batch inference in a single forward pass for concurrent packet decisions.
+
+        Args:
+            states: Array or Tensor of shape [N, state_dim].
+            valid_action_masks: Boolean array or list of valid action masks per sample.
+
+        Returns:
+            Numpy array of shape (N,) containing selected action index per packet.
+        """
+        if isinstance(states, torch.Tensor):
+            states_t = states.float()
+            N = states_t.shape[0]
+        else:
+            states_arr = np.asarray(states, dtype=np.float32)
+            if states_arr.ndim == 1:
+                states_arr = states_arr[np.newaxis, :]
+            N = states_arr.shape[0]
+            states_t = torch.from_numpy(states_arr)
+
+        model_to_use = self.traced_policy_net if self.traced_policy_net is not None else self.policy_net
+
+        with torch.inference_mode():
+            q_values_batch = model_to_use(states_t).cpu().numpy()
+
+        selected_actions = np.zeros(N, dtype=int)
+
+        for i in range(N):
+            q_vals = q_values_batch[i]
+            mask = valid_action_masks[i] if valid_action_masks is not None else None
+
+            if mask is not None:
+                if isinstance(mask, np.ndarray) and mask.dtype == bool:
+                    valid_indices = np.where(mask)[0]
+                elif isinstance(mask, (list, tuple, set, np.ndarray)):
+                    valid_indices = np.array(list(mask), dtype=int)
+                else:
+                    valid_indices = np.arange(self.action_dim)
+            else:
+                valid_indices = np.arange(self.action_dim)
+
+            if len(valid_indices) == 0:
+                valid_indices = np.arange(self.action_dim)
+
+            if np.random.random() < self.epsilon:
+                selected_actions[i] = int(np.random.choice(valid_indices))
+            else:
+                valid_q = q_vals[valid_indices]
+                max_q = np.max(valid_q)
+                best_mask = np.isclose(valid_q, max_q)
+                best_actions = valid_indices[best_mask]
+                selected_actions[i] = int(np.random.choice(best_actions))
+
+        return selected_actions
+
+    def export_to_numpy_fastpath(self) -> NumPyFastPath:
+        """
+        Export policy network weights as pure NumPy arrays for zero-autograd microsecond BLAS execution.
+        """
+        params = list(self.policy_net.net.parameters())
+        w1 = params[0].detach().cpu().numpy()
+        b1 = params[1].detach().cpu().numpy()
+        w2 = params[2].detach().cpu().numpy()
+        b2 = params[3].detach().cpu().numpy()
+        w3 = params[4].detach().cpu().numpy()
+        b3 = params[5].detach().cpu().numpy()
+
+        return NumPyFastPath(w1, b1, w2, b2, w3, b3)
+
     def update(self) -> Optional[float]:
         """
         Sample minibatch from ReplayBuffer, compute Smooth L1 (Huber) loss against target network,
         perform backpropagation, update parameters, and decay epsilon.
-
-        Returns:
-            Computed scalar loss float value, or None if buffer size < batch_size.
         """
         if len(self.replay_buffer) < self.batch_size:
             return None
 
         states, actions, rewards, next_states, dones = self.replay_buffer.sample(self.batch_size)
 
-        # Compute Q(s, a) using policy_net
         state_action_values = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
 
-        # Compute max_a' Q_target(s', a') using target_net
         with torch.no_grad():
             next_state_values = self.target_net(next_states).max(dim=1)[0]
             expected_state_action_values = rewards + (1.0 - dones) * self.gamma * next_state_values
@@ -426,8 +510,11 @@ class DQNAgent:
         loss.backward()
         self.optimizer.step()
 
-        # Decay epsilon
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
+
+        if self.is_optimized:
+            self.traced_policy_net = None
+            self.is_optimized = False
 
         return float(loss.item())
 
@@ -458,3 +545,5 @@ class DQNAgent:
             state_dict = torch.load(filepath)
         self.policy_net.load_state_dict(state_dict)
         self.update_target_network()
+        self.traced_policy_net = None
+        self.is_optimized = False
