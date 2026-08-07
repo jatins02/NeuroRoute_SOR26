@@ -1,7 +1,3 @@
-from neuroroute.ai.env import NetworkRoutingEnv
-
-__all__ = ["NetworkRoutingEnv"]
-""
 """
 NeuroRoute AI module exporting gymnasium routing environment, Q-learning agent, and PyTorch DQN agent components.
 """
@@ -16,3 +12,4 @@ __all__ = [
     "DQNModel",
     "ReplayBuffer",
 ]
+
