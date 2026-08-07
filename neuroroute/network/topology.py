@@ -81,8 +81,8 @@ class TopologyManager:
 
 
 # instantiation and testing
-top = TopologyManager()
-top.load_topology("configs/square-topology.json")
+# top = TopologyManager()
+# top.load_topology("configs/square-topology.json")
 # top.print_graph()
 
 """testing TopologyManager class functions"""
