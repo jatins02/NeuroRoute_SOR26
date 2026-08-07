@@ -1,99 +1,112 @@
 import heapq
 import random
 from typing import Optional
+
 from neuroroute.network.topology import TopologyManager
 
-class Dijkstras:
-    def __init__(self, topo : TopologyManager) -> None:
-        self.topo = topo
 
-    def get_shortest_path(self, source : str, target : str) -> list[str]:
-        if (source not in self.topo.graph or target not in self.topo.graph):
-            if (source not in self.topo.graph):
-                print(f"source not connected")
-            elif (target not in self.topo.graph):
-                print(f"target not connected")
-            else:
-                print(f"both source and target not connected")
+class DijkstraRouter:
+  """Computes shortest latency paths using Dijkstra's algorithm."""
 
-            return []
+  def __init__(self, topology: TopologyManager) -> None:
+    self.topology = topology
 
-        if source == target:        # should strip the inputs of left and right whitespaces
-            return [source]
+  def get_shortest_path(self, source: str, target: str) -> list[str]:
+    """Calculates the minimum latency node path from source to target."""
+    if (
+        source not in self.topology.graph
+        or target not in self.topology.graph
+    ):
+      return []
 
-        # if no base case, then implement dijkstras
-        distances: dict[str, float] = {source: 0.0}
-        previous: dict[str, Optional[str]] = {source: None}     # what is this line doing
-        pq: list[tuple[float, str]] = [(0.0, source)]
-        visited: set[str] = set()
+    if source == target:
+      return [source]
 
-        while pq:       # pq is not empty
-            current_dist, current_node = heapq.heappop(pq)
+    distances: dict[str, float] = {source: 0.0}
+    previous: dict[str, Optional[str]] = {source: None}
+    pq: list[tuple[float, str]] = [(0.0, source)]
+    visited: set[str] = set()
 
-            if current_node in visited: continue
-            visited.add(current_node)
-            if current_node == target:
-                break
+    while pq:
+      current_dist, current_node = heapq.heappop(pq)
 
-            neighbours = self.topo.graph.get(current_node, {})
-            for neighbour, metric in neighbours.items():
-                latency = metric.get("latency", float("inf"))
-                newdist = latency + current_dist
+      if current_node in visited:
+        continue
+      visited.add(current_node)
 
-                if newdist < distances.get(neighbour, float("inf")):
-                    distances[neighbour] = newdist
-                    previous[neighbour] = current_node
-                    heapq.heappush(pq, (newdist, neighbour))
+      if current_node == target:
+        break
 
-        path: list[str] = []
-        curr: Optional[str] = target
-        while curr is not None:
-            path.append(curr)
-            curr = previous.get(curr)
+      neighbors = self.topology.graph.get(current_node, {})
+      for neighbor, metrics in neighbors.items():
+        # Skip down/broken links
+        if not metrics.get("active", True):
+          continue
 
-        path.reverse()
-        return path if (path and path[0] == source) else []
+        latency = metrics.get("latency", float("inf"))
+        new_dist = current_dist + latency
 
-    def get_next_hop(self, current: str, destination: str) -> Optional[str]:
-        if current == destination:
-            return current
+        if new_dist < distances.get(neighbor, float("inf")):
+          distances[neighbor] = new_dist
+          previous[neighbor] = current_node
+          heapq.heappush(pq, (new_dist, neighbor))
 
-        path = self.get_shortest_path(current, destination)
-        return path[1] if len(path) > 1 else None
+    # Reconstruct path
+    path: list[str] = []
+    curr: Optional[str] = target
+    while curr is not None:
+      path.append(curr)
+      curr = previous.get(curr)
+
+    path.reverse()
+    return path if (path and path[0] == source) else []
+
+  def get_next_hop(self, current: str, destination: str) -> Optional[str]:
+    """Returns immediate next-hop node along the active shortest path."""
+    if current == destination:
+      return current
+
+    path = self.get_shortest_path(current, destination)
+    return path[1] if len(path) > 1 else None
 
 
-class RoundRobin():
-    def __init__(self, topo : TopologyManager) -> None:
-        self.topo = topo
-        self._indices: dict[str, int] = {}
+class RoundRobinRouter:
 
-    def get_next_hop(self, current: str, destination: str) -> Optional[str]:
-        if current == destination:
-            return current
+  def __init__(self, topology: TopologyManager) -> None:
+    self.topology = topology
+    self._indices: dict[str, int] = {}
 
-        neighbours = self.topo.get_neighbours(current)
-        if not neighbours:
-            return None
+  def get_next_hop(self, current: str, destination: str) -> Optional[str]:
+    if current == destination:
+      return current
 
-        # Track state per node
-        idx = self._indices.get(current, 0)
-        next_hop = neighbours[idx % len(neighbours)]
-        self._indices[current] = idx + 1
-        return next_hop
+    neighbors = self.topology.get_neighbours(current)
+    if not neighbors:
+      return None
 
-class Random:
-    def __init__(self, topo: TopologyManager) -> None:
-        self.topo = topo
+    idx = self._indices.get(current, 0)
+    next_hop = neighbors[idx % len(neighbors)]
+    self._indices[current] = idx + 1
+    return next_hop
 
-    def get_next_hop(self, current: str, destination: str) -> Optional[str]:
-        if current == destination:
-            return current
 
-        neighbors = self.topo.get_neighbours(current)
-        if not neighbors:
-            return None
+class RandomRouter:
 
-        return random.choice(neighbors)
+  def __init__(self, topology: TopologyManager) -> None:
+    self.topology = topology
 
-    
+  def get_next_hop(self, current: str, destination: str) -> Optional[str]:
+    if current == destination:
+      return current
 
+    neighbors = self.topology.get_neighbours(current)
+    if not neighbors:
+      return None
+
+    return random.choice(neighbors)
+
+
+# Backward-compatible aliases (tests import these names)
+Dijkstras = DijkstraRouter
+RoundRobin = RoundRobinRouter
+Random = RandomRouter
