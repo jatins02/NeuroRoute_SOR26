@@ -105,11 +105,17 @@ class NetworkRoutingEnv(gym.Env):
             lat = topology.astype(np.float32)
         elif hasattr(topology, "graph") and isinstance(topology.graph, dict):
             # Support TopologyManager objects from neuroroute.network.topology
+            sorted_node_keys = sorted(list(topology.graph.keys()))
+            node_map = {n: i for i, n in enumerate(sorted_node_keys[: self.num_nodes])}
             for u, neighbors in topology.graph.items():
-                u_idx = int(u) if str(u).isdigit() else hash(u) % self.num_nodes
+                if u not in node_map:
+                    continue
+                u_idx = node_map[u]
                 for v, metrics in neighbors.items():
-                    v_idx = int(v) if str(v).isdigit() else hash(v) % self.num_nodes
-                    if u_idx != v_idx and u_idx < self.num_nodes and v_idx < self.num_nodes:
+                    if v not in node_map:
+                        continue
+                    v_idx = node_map[v]
+                    if u_idx != v_idx:
                         adj[u_idx, v_idx] = True
                         lat[u_idx, v_idx] = float(metrics.get("latency", 10.0))
         elif isinstance(topology, dict):

@@ -27,8 +27,13 @@ AVAILABLE_STRATEGIES = ["static", "round-robin", "random", "qlearning"]
 # --------------------------------------------------------------------------
 
 def check_keypress() -> Optional[str]:
-    """Non-blocking keyboard check for interactive strategy toggling."""
+    """Non-blocking keyboard check for interactive strategy toggling.
+
+    Works on Windows (msvcrt) and macOS/Linux (select + tty/termios).
+    Returns the lower-cased character pressed, or None if no key is waiting.
+    """
     try:
+        # Windows path
         import msvcrt
         if msvcrt.kbhit():
             ch = msvcrt.getch()
@@ -37,7 +42,24 @@ def check_keypress() -> Optional[str]:
             except Exception:
                 return None
     except ImportError:
-        pass
+        # macOS / Linux path: non-blocking stdin read via select
+        import select
+        import sys
+        import tty
+        import termios
+        fd = sys.stdin.fileno()
+        try:
+            old_settings = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                ready, _, _ = select.select([sys.stdin], [], [], 0)
+                if ready:
+                    ch = sys.stdin.read(1)
+                    return ch.lower() if ch else None
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except Exception:
+            pass
     return None
 
 
@@ -143,6 +165,9 @@ def cycle_strategy(state: TUIState) -> str:
         new_strat_obj = get_strategy(new_strategy_name, state.topology_manager)
         for node in state.router_nodes.values():
             node.strategy = new_strat_obj
+            # Clear cached routes so the new strategy takes effect immediately
+            if hasattr(node, "_route_cache"):
+                node._route_cache.clear()
 
     state.add_log(f"[bold yellow]Switched routing strategy to: {new_strategy_name.upper()}[/bold yellow]")
     return new_strategy_name

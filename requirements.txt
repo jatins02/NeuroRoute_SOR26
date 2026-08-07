@@ -1,0 +1,16 @@
+# NeuroRoute dependencies
+# Install with: pip install -e ".[dev]"
+# Or for core only: pip install -e .
+
+# Core dependencies (also declared in pyproject.toml)
+torch
+gymnasium
+pyzmq
+click
+rich
+
+# Development / testing tools
+pytest
+pytest-asyncio
+ruff
+pre-commit

@@ -382,15 +382,6 @@ class SimRouterNode(BaseRouterNode):
         """Register reference to all peer router nodes in the network."""
         self.peers = peers
 
-        # Telemetry & metrics
-        self._drop_count: int = 0
-        self._processed_count: int = 0
-        self._total_wait_time: float = 0.0
-
-        # Runtime task management
-        self._running: bool = False
-        self._task: Optional[asyncio.Task] = None
-
     # ---- Peer Management -----------------------------------------------
 
     def link_peer(self, peer: "RouterNode", metric: int = 1) -> None:
@@ -532,16 +523,9 @@ class SimRouterNode(BaseRouterNode):
                 except KeyError:
                     pass
 
-            try:
-                updated_packet = packet.record_hop(self.node_id)
-            except PacketValidationError:
-                stats["packets_dropped"] += 1
-                continue
-
-            success, _ = await self.forward(updated_packet)
+            success, _ = await self.forward(packet)
             if not success:
-                if hasattr(self, "stats") and isinstance(self.stats, dict):
-                    self.stats["packets_dropped"] += 1
+                stats["packets_dropped"] += 1
     async def _forward_loop(self) -> None:
         """Worker loop running as an asyncio task to process inbound queue."""
         while self._running:

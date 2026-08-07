@@ -18,6 +18,12 @@ from neuroroute.router.plane import FastQueue, FastRouterNode, Packet, Priority,
 
 class TestPerformanceOptimization(unittest.TestCase):
 
+    def setUp(self):
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+
     def test_fast_queue_vs_asyncio_queue_throughput(self):
         """Compare FastQueue put/get latency against standard asyncio.Queue."""
         async def run():

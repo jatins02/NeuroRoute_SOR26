@@ -259,6 +259,12 @@ class LinearRouterNode(BaseRouterNode):
 
 class TestBaseRouterNode(unittest.TestCase):
 
+    def setUp(self):
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+
     def test_cannot_instantiate_abstract_base(self):
         with self.assertRaises(TypeError):
             BaseRouterNode("bad-node")  # type: ignore[abstract]
@@ -381,6 +387,12 @@ class TestBaseRouterNode(unittest.TestCase):
 # --------------------------------------------------------------------------
 
 class TestRouterNode(unittest.TestCase):
+
+    def setUp(self):
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
 
     def test_link_and_unlink_peer(self):
         node_a = RouterNode("node-A")

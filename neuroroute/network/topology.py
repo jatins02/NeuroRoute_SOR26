@@ -106,3 +106,22 @@ class TopologyManager:
       for dst in neighbors:
         links.append((src, dst))
     return links
+
+  def get_all_nodes(self) -> list[str]:
+    """Returns list of all node IDs present in the topology."""
+    return list(self.graph.keys())
+
+  def is_connected(self, start: str, end: str) -> bool:
+    """Returns True if an active directed link exists from start to end."""
+    if start in self.graph and end in self.graph[start]:
+      return bool(self.graph[start][end].get("active", True))
+    return False
+
+  def get_link_metrics(self, start: str, end: str) -> dict:
+    """Returns the full metrics dict for the directed link from start to end.
+
+    Raises KeyError if the link does not exist.
+    """
+    if start in self.graph and end in self.graph[start]:
+      return self.graph[start][end]
+    raise KeyError(f"No link from {start!r} to {end!r}")
