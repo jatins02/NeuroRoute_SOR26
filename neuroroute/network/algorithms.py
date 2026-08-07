@@ -60,3 +60,40 @@ class Dijkstras:
 
         path = self.get_shortest_path(current, destination)
         return path[1] if len(path) > 1 else None
+
+
+class RoundRobin():
+    def __init__(self, topo : TopologyManager) -> None:
+        self.topo = topo
+        self._indices: dict[str, int] = {}
+
+    def get_next_hop(self, current: str, destination: str) -> Optional[str]:
+        if current == destination:
+            return current
+
+        neighbours = self.topo.get_neighbours(current)
+        if not neighbours:
+            return None
+
+        # Track state per node
+        idx = self._indices.get(current, 0)
+        next_hop = neighbours[idx % len(neighbours)]
+        self._indices[current] = idx + 1
+        return next_hop
+
+class Random:
+    def __init__(self, topo: TopologyManager) -> None:
+        self.topo = topo
+
+    def get_next_hop(self, current: str, destination: str) -> Optional[str]:
+        if current == destination:
+            return current
+
+        neighbors = self.topo.get_neighbours(current)
+        if not neighbors:
+            return None
+
+        return random.choice(neighbors)
+
+    
+

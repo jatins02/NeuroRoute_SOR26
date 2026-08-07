@@ -1,6 +1,6 @@
 import pytest
 from neuroroute.network.topology import TopologyManager
-from neuroroute.network.algorithms import Dijkstras
+from neuroroute.network.algorithms import Dijkstras, RoundRobin, Random
 
 @pytest.fixture
 def sample_topo():
@@ -17,3 +17,20 @@ def test_dijkstras(sample_topo):
 
     next_hop = router.get_next_hop("nodeA", "nodeD")
     assert next_hop == "nodeB"
+
+def test_round_robin(sample_topo):
+    router = RoundRobin(sample_topo)
+
+    first_hop = router.get_next_hop("nodeA", "nodeD")
+    second_hop = router.get_next_hop("nodeA", "nodeD")
+    # third_hop = router.get_next_hop("nodeA", "nodeD")
+
+    assert first_hop == "nodeB"
+    assert second_hop == "nodeD"
+
+def test_random_router_valid_neighbour(sample_topo):
+    router = Random(sample_topo)
+    next_hop = router.get_next_hop("nodeA", "nodeD")
+
+    assert next_hop in ["nodeB", "nodeC"]
+
