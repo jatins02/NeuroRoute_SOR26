@@ -336,3 +336,98 @@ class BaseRouterNode(abc.ABC):
             f"queue={self.queue_length}/{self.buffer_size}, "
             f"routes={len(self._routing_table)})"
         )
+
+
+# --------------------------------------------------------------------------
+# SimRouterNode
+# --------------------------------------------------------------------------
+
+class SimRouterNode(BaseRouterNode):
+    """
+    Concrete Router Node used in simulation runs.
+    Integrates with TopologyManager, routing strategies, and peer nodes.
+    """
+
+    def __init__(
+        self,
+        node_id: str,
+        topology_manager: Any,
+        strategy: Any,
+        buffer_size: int = 1024,
+    ) -> None:
+        super().__init__(node_id, buffer_size=buffer_size)
+        self.topology_manager = topology_manager
+        self.strategy = strategy
+        self.peers: Dict[str, BaseRouterNode] = {}
+
+    def set_peers(self, peers: Dict[str, BaseRouterNode]) -> None:
+        """Register reference to all peer router nodes in the network."""
+        self.peers = peers
+
+    def lookup_route(self, destination: str) -> Optional[RouteEntry]:
+        """Resolve next hop using assigned strategy."""
+        next_hop = self.strategy.get_next_hop(self.node_id, destination)
+        if next_hop:
+            return RouteEntry(destination_prefix=destination, next_hop=next_hop)
+        return None
+
+    async def forward(self, packet: Packet) -> Tuple[bool, Optional[str]]:
+        """Forward packet to destination or next hop peer."""
+        if packet.destination == self.node_id:
+            return True, None
+
+        next_hop = self.strategy.get_next_hop(self.node_id, packet.destination)
+        if not next_hop or next_hop not in self.peers:
+            return False, None
+
+        peer_node = self.peers[next_hop]
+        success = await peer_node.enqueue(packet)
+        if success:
+            return True, next_hop
+        return False, None
+
+    async def run(self, stop_event: asyncio.Event, stats: Dict[str, Any]) -> None:
+        """
+        Main execution loop for this router node.
+        Dequeues incoming packets, applies latency delays, records hops, and forwards.
+        """
+        while not stop_event.is_set() or not self.is_empty:
+            try:
+                packet = await asyncio.wait_for(self.dequeue(), timeout=0.05)
+            except asyncio.TimeoutError:
+                continue
+
+            if packet.is_expired():
+                stats["packets_dropped"] += 1
+                continue
+
+            if packet.destination == self.node_id:
+                delivery_time = time.time() - packet.creation_time
+                stats["packets_delivered"] += 1
+                stats["total_latency"] += delivery_time
+                continue
+
+            next_hop = self.strategy.get_next_hop(self.node_id, packet.destination)
+            if not next_hop:
+                stats["packets_dropped"] += 1
+                continue
+
+            # Simulate link latency if applicable
+            if self.topology_manager and self.topology_manager.is_connected(self.node_id, next_hop):
+                try:
+                    metrics = self.topology_manager.get_link_metrics(self.node_id, next_hop)
+                    latency = float(metrics.get("latency", 0.0))
+                    if latency > 0:
+                        await asyncio.sleep(latency / 1000.0)
+                except KeyError:
+                    pass
+
+            try:
+                updated_packet = packet.record_hop(self.node_id)
+            except PacketValidationError:
+                stats["packets_dropped"] += 1
+                continue
+
+            success, _ = await self.forward(updated_packet)
+            if not success:
+                stats["packets_dropped"] += 1

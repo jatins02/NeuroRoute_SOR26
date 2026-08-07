@@ -54,6 +54,10 @@ class TopologyManager:
         # returns list of outgoing neighbours
         return list(self.graph.get(node, {}).keys())
 
+    def get_all_nodes(self) -> list[str]:
+        # returns list of all node ids in the graph
+        return list(self.graph.keys())
+
     def get_link_metrics(self, start: str, end: str) -> dict[float, float]:
         if not self.is_connected(start, end):
             # this link doesn't exist on graph
