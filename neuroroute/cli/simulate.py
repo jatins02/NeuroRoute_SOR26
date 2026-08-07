@@ -163,7 +163,11 @@ async def _generate_packets(
 
 
 async def run_simulation(
-    topology_path: str, steps: int, strategy_name: str, logger: logging.Logger
+    topology_path: str,
+    steps: int,
+    strategy_name: str,
+    logger: logging.Logger,
+    use_tui: bool = False,
 ) -> Dict[str, Any]:
     logger.info("Loading topology from '%s'...", topology_path)
     topo = TopologyManager()
@@ -199,6 +203,26 @@ async def run_simulation(
         for node in router_nodes.values()
     ]
 
+    tui_task = None
+    if use_tui:
+        from neuroroute.cli.tui import TUIState, run_live_tui
+        links = []
+        for src, neighbors in topo.graph.items():
+            for dst, metrics in neighbors.items():
+                links.append(
+                    (src, dst, float(metrics.get("latency", 0.0)), float(metrics.get("bandwidth", 0.0)))
+                )
+
+        tui_state = TUIState(
+            nodes=nodes,
+            links=links,
+            current_strategy=strategy_name,
+            router_nodes=router_nodes,
+            topology_manager=topo,
+            stats_ref=stats,
+        )
+        tui_task = asyncio.create_task(run_live_tui(tui_state, stop_event, refresh_rate=0.1))
+
     logger.info(
         "Starting packet generation loop (%d steps, strategy: %s)...",
         steps,
@@ -211,6 +235,8 @@ async def run_simulation(
 
     stop_event.set()
     await asyncio.gather(*node_tasks, return_exceptions=True)
+    if tui_task:
+        await asyncio.gather(tui_task, return_exceptions=True)
 
     stats["end_time"] = time.time()
     return stats
@@ -273,6 +299,13 @@ def display_summary(stats: Dict[str, Any], strategy: str, topology: str) -> None
     help="Routing strategy/algorithm to execute.",
 )
 @click.option(
+    "--tui",
+    "use_tui",
+    is_flag=True,
+    default=False,
+    help="Run live TUI dashboard during simulation.",
+)
+@click.option(
     "-v",
     "--verbose",
     "verbose",
@@ -280,15 +313,16 @@ def display_summary(stats: Dict[str, Any], strategy: str, topology: str) -> None
     help="Increase logging verbosity. Use -v for INFO, -vv for DEBUG.",
 )
 @click.version_option(version=__version__, prog_name="neuroroute-simulate")
-def main(topology: str, steps: int, strategy: str, verbose: int) -> None:
+def main(topology: str, steps: int, strategy: str, use_tui: bool, verbose: int) -> None:
     logger = configure_logging(verbose)
-    print_banner(topology, steps, strategy)
+    if not use_tui:
+        print_banner(topology, steps, strategy)
 
     stats: Optional[Dict[str, Any]] = None
     start_time = time.time()
 
     try:
-        stats = asyncio.run(run_simulation(topology, steps, strategy, logger))
+        stats = asyncio.run(run_simulation(topology, steps, strategy, logger, use_tui=use_tui))
     except KeyboardInterrupt:
         logger.warning("\n[bold yellow]Simulation interrupted by user (Ctrl+C). Cleaning up...[/bold yellow]")
         if stats is None:
