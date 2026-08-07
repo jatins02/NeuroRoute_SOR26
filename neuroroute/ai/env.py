@@ -25,6 +25,7 @@ class NetworkRoutingEnv(gym.Env):
         max_queue_capacity: int = 100,
         topology_graph: Optional[Any] = None,
         render_mode: Optional[str] = None,
+        max_steps: int = 100,
     ) -> None:
         """
         Initialize the network routing environment.
@@ -34,6 +35,7 @@ class NetworkRoutingEnv(gym.Env):
             max_queue_capacity: Maximum queue depth capacity per node.
             topology_graph: Optional graph specification (matrix, dict, or TopologyManager).
             render_mode: Rendering mode ("human" or "ansi").
+            max_steps: Maximum step budget before episode truncation.
         """
         super().__init__()
 
@@ -41,8 +43,9 @@ class NetworkRoutingEnv(gym.Env):
         self.max_queue_capacity = max_queue_capacity
         self.render_mode = render_mode
         self.topology_graph = topology_graph
+        self.max_steps = max_steps
 
-        # Action Space: Choose a neighbor node to forward packet to (0 to num_nodes - 1)
+        # Action Space: Choose a neighbor node index to forward packet to (0 to num_nodes - 1)
         self.action_space = spaces.Discrete(num_nodes)
 
         # Observation Space:
@@ -75,7 +78,6 @@ class NetworkRoutingEnv(gym.Env):
         self.successful_deliveries: int = 0
         self.total_packets: int = 0
         self.step_count: int = 0
-        self.max_steps: int = 100
 
     def _parse_topology(self, topology: Any) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -102,7 +104,7 @@ class NetworkRoutingEnv(gym.Env):
             adj = (topology > 0) & (~np.eye(self.num_nodes, dtype=bool))
             lat = topology.astype(np.float32)
         elif hasattr(topology, "graph") and isinstance(topology.graph, dict):
-            # Support TopologyManager objects
+            # Support TopologyManager objects from neuroroute.network.topology
             for u, neighbors in topology.graph.items():
                 u_idx = int(u) if str(u).isdigit() else hash(u) % self.num_nodes
                 for v, metrics in neighbors.items():
@@ -160,6 +162,8 @@ class NetworkRoutingEnv(gym.Env):
         super().reset(seed=seed)
 
         self.step_count = 0
+        self.dropped_packets = 0
+        self.successful_deliveries = 0
 
         # Handle custom options if provided
         if options and "current_node" in options:
@@ -181,6 +185,10 @@ class NetworkRoutingEnv(gym.Env):
             self.queue_depths = self.np_random.uniform(
                 low=0.0, high=self.max_queue_capacity * 0.2, size=self.num_nodes
             ).astype(np.float32)
+
+        # Sync from data plane router nodes if passed in options
+        if options and "router_nodes" in options:
+            self.sync_from_data_plane(options["router_nodes"])
 
         obs = self._get_observation()
         info = self._get_info()
@@ -221,18 +229,18 @@ class NetworkRoutingEnv(gym.Env):
         latency = float(self.link_latencies[prev_node, action])
         queue_length = float(self.queue_depths[self.current_node])
 
-        # Check queue overflow
-        if queue_length >= self.max_queue_capacity:
-            self.dropped_packets += 1
-            reward = -20.0
-            terminated = False
-        elif self.current_node == self.destination_node:
-            # Reached target destination!
+        # Check destination arrival
+        if self.current_node == self.destination_node:
             self.successful_deliveries += 1
             reward = 50.0
             terminated = True
+        # Check queue overflow at target node
+        elif queue_length >= self.max_queue_capacity:
+            self.dropped_packets += 1
+            reward = -20.0
+            terminated = False
         else:
-            # Standard hop penalty proportional to latency and queue depth
+            # Standard hop penalty proportional to latency and queue depth ratio
             reward = -(0.5 * latency + 1.0 * (queue_length / float(self.max_queue_capacity)))
             terminated = False
 
@@ -241,6 +249,20 @@ class NetworkRoutingEnv(gym.Env):
         info = self._get_info()
 
         return obs, float(reward), terminated, truncated, info
+
+    def sync_from_data_plane(self, router_nodes: Union[List[Any], Dict[str, Any]]) -> None:
+        """
+        Sync node queue depths from live data-plane RouterNode objects.
+        """
+        if isinstance(router_nodes, dict):
+            for idx in range(self.num_nodes):
+                key = str(idx)
+                if key in router_nodes and hasattr(router_nodes[key], "queue_length"):
+                    self.queue_depths[idx] = float(router_nodes[key].queue_length)
+        elif isinstance(router_nodes, (list, tuple)):
+            for idx, node in enumerate(router_nodes[: self.num_nodes]):
+                if hasattr(node, "queue_length"):
+                    self.queue_depths[idx] = float(node.queue_length)
 
     def render(self) -> Optional[str]:
         """
