@@ -6,6 +6,7 @@ Gymnasium NetworkRoutingEnv environment over N episodes. Saves trained policy
 checkpoint to disk.
 """
 
+import random
 import sys
 import click
 import numpy as np
@@ -37,7 +38,7 @@ def train_qlearning(
 
     env = NetworkRoutingEnv(num_nodes=num_nodes, topology_graph=topo)
     agent = QLearningAgent(
-        num_states=num_nodes * num_nodes,
+        num_states=num_nodes,
         num_actions=num_nodes,
         learning_rate=lr,
         discount_factor=gamma,
@@ -53,9 +54,8 @@ def train_qlearning(
     total_steps = []
 
     for episode in range(1, episodes + 1):
-        # Pick random source != destination for each episode
-        src = np.random.randint(0, num_nodes - 1)
-        dst = num_nodes - 1
+        # Pick random source and destination for each episode
+        src, dst = random.sample(range(num_nodes), 2)
         obs, info = env.reset(options={"current_node": src, "destination_node": dst})
 
         done = False
@@ -63,12 +63,16 @@ def train_qlearning(
         steps = 0
 
         while not done:
+            # Use compact (current_node, destination) state for tabular Q-learning
+            # This gives N*(N-1) unique states — fully learnable for small networks
+            state = (env.current_node, dst)
             action_mask = env.get_action_mask(env.current_node)
-            action = agent.choose_action(obs, valid_actions=action_mask)
+            action = agent.choose_action(state, valid_actions=action_mask)
             next_obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
 
-            agent.update(obs, action, reward, next_obs, done)
+            next_state = (env.current_node, dst)
+            agent.update(state, action, reward, next_state, done)
             obs = next_obs
             ep_reward += reward
             steps += 1
@@ -96,27 +100,30 @@ def train_qlearning(
     console.print(f"[bold green]✔ Q-Table saved to '{save_path}'[/bold green]")
 
     # Evaluation Phase (epsilon = 0.0, pure exploitation)
-    console.print("\n[bold yellow]Evaluating Trained Agent (20 episodes, Exploitation Mode)...[/bold yellow]")
+    eval_episodes = num_nodes * (num_nodes - 1) * 2  # test all src->dst pairs multiple times
+    console.print(f"\n[bold yellow]Evaluating Trained Agent ({eval_episodes} episodes, Exploitation Mode)...[/bold yellow]")
     agent.epsilon = 0.0
     eval_successes = 0
     eval_steps = []
 
-    for episode in range(20):
-        obs, info = env.reset(options={"current_node": 0, "destination_node": num_nodes - 1})
+    for episode in range(eval_episodes):
+        src, dst = random.sample(range(num_nodes), 2)
+        obs, info = env.reset(options={"current_node": src, "destination_node": dst})
         done = False
         steps = 0
         while not done and steps < 20:
+            state = (env.current_node, dst)
             mask = env.get_action_mask(env.current_node)
-            action = agent.choose_action(obs, valid_actions=mask)
+            action = agent.choose_action(state, valid_actions=mask)
             obs, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             steps += 1
 
-        if terminated and env.current_node == (num_nodes - 1):
+        if terminated and env.current_node == dst:
             eval_successes += 1
             eval_steps.append(steps)
 
-    eval_rate = (eval_successes / 20) * 100
+    eval_rate = (eval_successes / eval_episodes) * 100
     avg_eval_steps = np.mean(eval_steps) if eval_steps else 0.0
 
     table = Table(title="Q-Learning Evaluation Summary", expand=False)
@@ -204,7 +211,7 @@ def train_dqn(
     default="qlearning",
     help="RL algorithm to train.",
 )
-@click.option("--episodes", "-e", default=100, help="Number of RL training episodes.")
+@click.option("--episodes", "-e", default=5000, help="Number of RL training episodes.")
 @click.option("--nodes", "-n", default=4, help="Number of nodes in network graph.")
 @click.option("--lr", default=0.1, help="Learning rate.")
 @click.option("--gamma", default=0.95, help="Discount factor.")
