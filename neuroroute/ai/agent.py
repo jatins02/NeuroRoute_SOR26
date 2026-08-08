@@ -539,10 +539,7 @@ class DQNAgent:
         """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Model file not found: {filepath}")
-        try:
-            state_dict = torch.load(filepath, weights_only=True)
-        except Exception:
-            state_dict = torch.load(filepath)
+        state_dict = torch.load(filepath, weights_only=True)
         self.policy_net.load_state_dict(state_dict)
         self.update_target_network()
         self.traced_policy_net = None

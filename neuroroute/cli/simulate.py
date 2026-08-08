@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import sys
 import time
 from typing import Any, Dict, List, Optional
+
+import numpy as np
 
 import click
 from rich.console import Console
@@ -79,13 +82,19 @@ class QLearningStrategy:
 
     def __init__(self, topo: TopologyManager) -> None:
         self.topo = topo
-        self.nodes = topo.get_all_nodes()
+        self.nodes = sorted(topo.get_all_nodes())
         self.node_to_idx = {node: i for i, node in enumerate(self.nodes)}
         self.agent = QLearningAgent(
             num_states=len(self.nodes),
             num_actions=len(self.nodes),
             epsilon=0.1,
         )
+        if os.path.exists("q_table.json"):
+            try:
+                self.agent.load_q_table("q_table.json")
+                self.agent.epsilon = 0.0
+            except Exception:
+                pass
         self.env = NetworkRoutingEnv(
             num_nodes=len(self.nodes),
             topology_graph=topo,
@@ -99,9 +108,23 @@ class QLearningStrategy:
             return None
 
         curr_idx = self.node_to_idx[current]
+        dest_idx = self.node_to_idx[destination]
+
+        # Build state observation matching NetworkRoutingEnv state format
+        queue_depths = np.zeros(len(self.nodes), dtype=np.float32)
+        latencies = np.zeros(len(self.nodes), dtype=np.float32)
+        for i, target_node in enumerate(self.nodes):
+            if self.topo.is_connected(current, target_node):
+                try:
+                    m = self.topo.get_link_metrics(current, target_node)
+                    latencies[i] = float(m.get("latency", 10.0))
+                except KeyError:
+                    pass
+
+        obs = np.concatenate([queue_depths, [float(dest_idx)], latencies]).astype(np.float32)
         action_mask = self.env.get_action_mask(curr_idx)
 
-        action_idx = self.agent.choose_action(curr_idx, valid_actions=action_mask)
+        action_idx = self.agent.choose_action(obs, valid_actions=action_mask)
 
         if 0 <= action_idx < len(self.nodes) and action_mask[action_idx]:
             return self.nodes[action_idx]
@@ -168,6 +191,7 @@ async def run_simulation(
     strategy_name: str,
     logger: logging.Logger,
     use_tui: bool = False,
+    enable_chaos: bool = False,
 ) -> Dict[str, Any]:
     logger.info("Loading topology from '%s'...", topology_path)
     topo = TopologyManager()
@@ -203,6 +227,14 @@ async def run_simulation(
         for node in router_nodes.values()
     ]
 
+    chaos_scheduler = None
+    chaos_task = None
+    if enable_chaos:
+        from neuroroute.network.chaos import ChaosScheduler
+        logger.info("Chaos Engineering ENABLED: Injecting random link failures and latency spikes.")
+        chaos_scheduler = ChaosScheduler(topo)
+        chaos_task = asyncio.create_task(chaos_scheduler.start(interval_seconds=0.2, duration_seconds=steps * 0.05))
+
     tui_task = None
     if use_tui:
         from neuroroute.cli.tui import TUIState, run_live_tui
@@ -234,7 +266,11 @@ async def run_simulation(
     await asyncio.sleep(0.5)
 
     stop_event.set()
+    if chaos_scheduler:
+        chaos_scheduler.stop()
     await asyncio.gather(*node_tasks, return_exceptions=True)
+    if chaos_task:
+        await asyncio.gather(chaos_task, return_exceptions=True)
     if tui_task:
         await asyncio.gather(tui_task, return_exceptions=True)
 
@@ -306,6 +342,13 @@ def display_summary(stats: Dict[str, Any], strategy: str, topology: str) -> None
     help="Run live TUI dashboard during simulation.",
 )
 @click.option(
+    "--chaos",
+    "enable_chaos",
+    is_flag=True,
+    default=False,
+    help="Inject random link failures and latency spikes during simulation.",
+)
+@click.option(
     "-v",
     "--verbose",
     "verbose",
@@ -313,7 +356,7 @@ def display_summary(stats: Dict[str, Any], strategy: str, topology: str) -> None
     help="Increase logging verbosity. Use -v for INFO, -vv for DEBUG.",
 )
 @click.version_option(version=__version__, prog_name="neuroroute-simulate")
-def main(topology: str, steps: int, strategy: str, use_tui: bool, verbose: int) -> None:
+def main(topology: str, steps: int, strategy: str, use_tui: bool, enable_chaos: bool, verbose: int) -> None:
     logger = configure_logging(verbose)
     if not use_tui:
         print_banner(topology, steps, strategy)
@@ -322,7 +365,7 @@ def main(topology: str, steps: int, strategy: str, use_tui: bool, verbose: int) 
     start_time = time.time()
 
     try:
-        stats = asyncio.run(run_simulation(topology, steps, strategy, logger, use_tui=use_tui))
+        stats = asyncio.run(run_simulation(topology, steps, strategy, logger, use_tui=use_tui, enable_chaos=enable_chaos))
     except KeyboardInterrupt:
         logger.warning("\n[bold yellow]Simulation interrupted by user (Ctrl+C). Cleaning up...[/bold yellow]")
         if stats is None:

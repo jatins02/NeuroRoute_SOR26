@@ -6,6 +6,7 @@ using Poisson distribution inter-arrival intervals and high-priority traffic bur
 """
 
 import asyncio
+import collections
 import random
 import time
 import uuid
@@ -82,8 +83,9 @@ class TrafficGenerator:
         # Random number generator instance
         self.rng = random.Random(seed)
 
-        # Telemetry metrics
-        self.generated_packets: List[Packet] = []
+        # Telemetry metrics — bounded ring buffer keeps only the last 1000
+        # packet references to prevent unbounded memory growth.
+        self.generated_packets: collections.deque = collections.deque(maxlen=1000)
         self.generated_count: int = 0
         self.burst_count: int = 0
 
