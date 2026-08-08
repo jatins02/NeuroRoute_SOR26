@@ -52,8 +52,9 @@ class ChaosScheduler:
       for src in self.topology.graph:
         if node in self.topology.graph[src]:
           self.restore_link(src, node)
+.
 
-  def trigger_random_event() -> str:
+  def trigger_random_event(self) -> str:
     """Selects a random active link and applies a random chaos event."""
     links = self.topology.get_all_links()
     if not links:
