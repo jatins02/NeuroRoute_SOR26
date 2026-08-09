@@ -402,16 +402,19 @@ class SimRouterNode(BaseRouterNode):
         """
         Resolve destination to a RouteEntry.
         Supports cached O(1) lookup, exact destination match, and prefix matching.
-        """
-        if destination in self._route_cache:
-            return self._route_cache[destination]
 
+        When a dynamic strategy (e.g. Q-learning) is set, the cache is bypassed
+        so the strategy is consulted on every routing decision.
+        """
+        # Dynamic strategies must be consulted every time — never cache their decisions
         if self.strategy:
             next_hop = self.strategy.get_next_hop(self.node_id, destination)
             if next_hop:
-                res = RouteEntry(destination_prefix=destination, next_hop=next_hop)
-                self._route_cache[destination] = res
-                return res
+                return RouteEntry(destination_prefix=destination, next_hop=next_hop)
+
+        # Static routing table: use cache for O(1) fast-path
+        if destination in self._route_cache:
+            return self._route_cache[destination]
 
         if destination in self._routing_table:
             res = self._routing_table[destination]
@@ -508,8 +511,14 @@ class SimRouterNode(BaseRouterNode):
                 stats["total_latency"] += delivery_time
                 continue
 
-            next_hop = self.strategy.get_next_hop(self.node_id, packet.destination)
-            if not next_hop:
+            # Use lookup_route() for a single consistent routing decision
+            route = self.lookup_route(packet.destination)
+            if route is None or not route.next_hop:
+                stats["packets_dropped"] += 1
+                continue
+
+            next_hop = route.next_hop
+            if next_hop not in self.peers:
                 stats["packets_dropped"] += 1
                 continue
 
@@ -523,7 +532,15 @@ class SimRouterNode(BaseRouterNode):
                 except KeyError:
                     pass
 
-            success, _ = await self.forward(packet)
+            # Forward directly to the chosen peer (avoid re-routing via forward/lookup_route)
+            peer_node = self.peers[next_hop]
+            try:
+                updated_packet = packet.record_hop(self.node_id)
+            except PacketValidationError:
+                stats["packets_dropped"] += 1
+                continue
+
+            success = await peer_node.enqueue(updated_packet)
             if not success:
                 stats["packets_dropped"] += 1
     async def _forward_loop(self) -> None:

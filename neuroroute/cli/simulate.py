@@ -83,10 +83,11 @@ class QLearningStrategy:
     def __init__(self, topo: TopologyManager) -> None:
         self.topo = topo
         self.nodes = sorted(topo.get_all_nodes())
+        num_nodes = len(self.nodes)
         self.node_to_idx = {node: i for i, node in enumerate(self.nodes)}
         self.agent = QLearningAgent(
-            num_states=len(self.nodes),
-            num_actions=len(self.nodes),
+            num_states=num_nodes,
+            num_actions=num_nodes,
             epsilon=0.1,
         )
         if os.path.exists("q_table.json"):
@@ -96,9 +97,15 @@ class QLearningStrategy:
             except Exception:
                 pass
         self.env = NetworkRoutingEnv(
-            num_nodes=len(self.nodes),
+            num_nodes=num_nodes,
             topology_graph=topo,
         )
+
+        # Pre-compute per-source-node action masks (topology is static)
+        self._mask_cache: Dict[int, np.ndarray] = {}
+        for node_name in self.nodes:
+            idx = self.node_to_idx[node_name]
+            self._mask_cache[idx] = self.env.get_action_mask(idx)
 
     def get_next_hop(self, current: str, destination: str) -> Optional[str]:
         if current == destination:
@@ -110,21 +117,12 @@ class QLearningStrategy:
         curr_idx = self.node_to_idx[current]
         dest_idx = self.node_to_idx[destination]
 
-        # Build state observation matching NetworkRoutingEnv state format
-        queue_depths = np.zeros(len(self.nodes), dtype=np.float32)
-        latencies = np.zeros(len(self.nodes), dtype=np.float32)
-        for i, target_node in enumerate(self.nodes):
-            if self.topo.is_connected(current, target_node):
-                try:
-                    m = self.topo.get_link_metrics(current, target_node)
-                    latencies[i] = float(m.get("latency", 10.0))
-                except KeyError:
-                    pass
-
-        obs = np.concatenate([queue_depths, [float(dest_idx)], latencies]).astype(np.float32)
-        action_mask = self.env.get_action_mask(curr_idx)
-
-        action_idx = self.agent.choose_action(obs, valid_actions=action_mask)
+        # Use compact (current, destination) state — both integers pass through
+        # quantize_state unchanged, giving N*(N-1) unique Q-table keys that
+        # tabular Q-learning can fully cover with modest training
+        state = (curr_idx, dest_idx)
+        action_mask = self._mask_cache[curr_idx]
+        action_idx = self.agent.choose_action(state, valid_actions=action_mask)
 
         if 0 <= action_idx < len(self.nodes) and action_mask[action_idx]:
             return self.nodes[action_idx]
@@ -210,6 +208,10 @@ async def run_simulation(
 
     for node in router_nodes.values():
         node.set_peers(router_nodes)
+
+    # Give adaptive strategies access to live router node state
+    if hasattr(strategy, "set_router_nodes"):
+        strategy.set_router_nodes(router_nodes)
 
     stats: Dict[str, Any] = {
         "packets_generated": 0,
